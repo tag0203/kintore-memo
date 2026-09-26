@@ -1,0 +1,11 @@
+# まだデプロイしない。Cloudflare Workers へつなぐときの雛形。
+# シークレットはここに書かない。
+#   npx wrangler secret put NOTION_TOKEN
+#   npx wrangler secret put NOTION_DATABASE_ID
+name = "kintore-memo"
+main = "worker/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# ブラウザのオリジンが Worker と違うときだけ設定する。未設定なら同一オリジンのみ。
+# ALLOWED_ORIGIN = "https://kintore-memo.pages.dev"

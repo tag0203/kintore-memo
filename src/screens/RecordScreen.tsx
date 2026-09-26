@@ -1,0 +1,325 @@
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { DifficultyFaces, Stars } from "../components/Difficulty";
+import {
+  BackIcon,
+  CalendarIcon,
+  ChevronDownIcon,
+  DumbbellIcon,
+  Icon,
+  LayersIcon,
+  PencilIcon,
+  RepeatIcon,
+  SaveIcon,
+} from "../components/icons";
+import { Modal } from "../components/Modal";
+import { useClient } from "../clientContext";
+import {
+  DIFFICULTY_LABELS,
+  PAGE_TITLE,
+  formatMonthDay,
+  formatWeight,
+  parseCount,
+  parseWeight,
+  type Difficulty,
+  type ExerciseLog,
+} from "../domain";
+import { useLoad } from "../hooks/useLoad";
+import type { Route } from "../route";
+import { useSession } from "../session";
+
+interface Draft {
+  weight: string;
+  reps: string;
+  sets: string;
+  difficulty: Difficulty | null;
+}
+
+function draftFromLog(log: ExerciseLog): Draft {
+  return {
+    weight: formatWeight(log.weightKg),
+    reps: String(log.reps),
+    sets: String(log.sets),
+    difficulty: log.difficulty,
+  };
+}
+
+const emptyDraft: Draft = { weight: "", reps: "", sets: "", difficulty: null };
+
+export function RecordScreen({
+  exercise,
+  navigate,
+  back,
+}: {
+  exercise: string;
+  navigate: (route: Route) => void;
+  back: () => void;
+}) {
+  const client = useClient();
+  const session = useSession();
+  const weightRef = useRef<HTMLInputElement>(null);
+  const repsRef = useRef<HTMLInputElement>(null);
+  const setsRef = useRef<HTMLInputElement>(null);
+  const loaded = useLoad(
+    () =>
+      Promise.all([
+        client.getPreviousLog(exercise, session.date),
+        client.getLogOnDate(exercise, session.date),
+      ]),
+    [client, exercise, session.date],
+  );
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [baseline, setBaseline] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+
+  useEffect(() => {
+    if (loaded.status !== "ready" || !loaded.data || draft) return;
+    const [previous, todayLog] = loaded.data;
+    const next = todayLog ? draftFromLog(todayLog) : previous ? draftFromLog(previous) : emptyDraft;
+    setDraft(next);
+    setBaseline(JSON.stringify(next));
+  }, [loaded.status, loaded.data, draft]);
+
+  const previous = loaded.data?.[0] ?? null;
+  const todayLog = loaded.data?.[1] ?? null;
+  const dirty = draft != null && JSON.stringify(draft) !== baseline;
+
+  function update(partial: Partial<Draft>) {
+    setDraft((current) => (current ? { ...current, ...partial } : current));
+    setError(null);
+  }
+
+  function leave() {
+    if (dirty) {
+      setConfirmDiscard(true);
+      return;
+    }
+    back();
+  }
+
+  async function onSave(event: FormEvent) {
+    event.preventDefault();
+    if (!draft || saving) return;
+    const weightKg = parseWeight(draft.weight);
+    const reps = parseCount(draft.reps);
+    const sets = parseCount(draft.sets);
+    if (weightKg == null || reps == null || sets == null || draft.difficulty == null) {
+      setError("重量・回数・セット・きつさを入力してください");
+      return;
+    }
+    setSaving(true);
+    try {
+      await client.createLog({
+        exercise,
+        weightKg,
+        reps,
+        sets,
+        difficulty: draft.difficulty,
+        date: session.date,
+        title: PAGE_TITLE,
+      });
+      session.addExercise(exercise);
+      navigate({ screen: "today" });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "保存できませんでした");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="screen record">
+      <header className="nav">
+        <button type="button" className="back-btn" onClick={leave} aria-label="戻る">
+          <Icon>
+            <BackIcon />
+          </Icon>
+        </button>
+        <h1>{exercise}</h1>
+        <span />
+      </header>
+
+      {loaded.status === "error" && (
+        <div className="status-line">
+          <p className="text-error">{loaded.error}</p>
+          <button type="button" className="btn secondary" onClick={loaded.reload}>
+            再読み込み
+          </button>
+        </div>
+      )}
+
+      {loaded.data == null && loaded.status === "loading" && <p className="status-line">読み込み中…</p>}
+
+      {loaded.status === "ready" && (
+        <>
+          <article className="previous-card">
+            <h2 className="card-kicker">前回</h2>
+            {previous ? (
+              <>
+                <div className="stats">
+                  <div className="stat">
+                    <span className="stat-label">日付</span>
+                    <span className="stat-value">{formatMonthDay(previous.date)}</span>
+                    <span className="stat-icon">
+                      <Icon>
+                        <CalendarIcon />
+                      </Icon>
+                    </span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">重量</span>
+                    <span className="stat-value">
+                      {formatWeight(previous.weightKg)} <small>kg</small>
+                    </span>
+                    <span className="stat-icon">
+                      <Icon>
+                        <DumbbellIcon />
+                      </Icon>
+                    </span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">回数</span>
+                    <span className="stat-value">
+                      {previous.reps} <small>回</small>
+                    </span>
+                    <span className="stat-icon">
+                      <Icon>
+                        <RepeatIcon />
+                      </Icon>
+                    </span>
+                  </div>
+                  <div className="stat">
+                    <span className="stat-label">セット</span>
+                    <span className="stat-value">
+                      {previous.sets} <small>セット</small>
+                    </span>
+                    <span className="stat-icon">
+                      <Icon>
+                        <LayersIcon />
+                      </Icon>
+                    </span>
+                  </div>
+                </div>
+                <div className="prev-difficulty">
+                  <span>きつさ</span>
+                  <span className="difficulty-chip">{DIFFICULTY_LABELS[previous.difficulty]}</span>
+                  <Stars value={previous.difficulty} />
+                </div>
+              </>
+            ) : (
+              <p className="empty-inline">まだ記録がありません</p>
+            )}
+          </article>
+
+          <form className="today-card" onSubmit={(event) => void onSave(event)}>
+            <h2 className="card-kicker">今日</h2>
+            {todayLog && <p className="today-note">今日の記録があります。保存すると、もう1行追加されます。</p>}
+            {draft && (
+              <>
+                <div className="field-row">
+                  <label htmlFor="weight">重量</label>
+                  <input
+                    id="weight"
+                    ref={weightRef}
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={draft.weight}
+                    onChange={(event) => update({ weight: event.target.value })}
+                  />
+                  <span className="unit">kg</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="重量を編集"
+                    onClick={() => weightRef.current?.focus()}
+                  >
+                    <Icon>
+                      <PencilIcon />
+                    </Icon>
+                  </button>
+                </div>
+                <div className="field-row">
+                  <label htmlFor="reps">回数</label>
+                  <input
+                    id="reps"
+                    ref={repsRef}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={draft.reps}
+                    onChange={(event) => update({ reps: event.target.value })}
+                  />
+                  <span className="unit">回</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="回数を編集"
+                    onClick={() => repsRef.current?.focus()}
+                  >
+                    <Icon>
+                      <PencilIcon />
+                    </Icon>
+                  </button>
+                </div>
+                <div className="field-row">
+                  <label htmlFor="sets">セット</label>
+                  <input
+                    id="sets"
+                    ref={setsRef}
+                    inputMode="numeric"
+                    autoComplete="off"
+                    value={draft.sets}
+                    onChange={(event) => update({ sets: event.target.value })}
+                  />
+                  <span className="unit">セット</span>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="セットを編集"
+                    onClick={() => setsRef.current?.focus()}
+                  >
+                    <Icon>
+                      <PencilIcon />
+                    </Icon>
+                  </button>
+                </div>
+                <div className="difficulty-row">
+                  <span id="difficulty-label">きつさ</span>
+                  <DifficultyFaces value={draft.difficulty} onChange={(difficulty) => update({ difficulty })} />
+                </div>
+                <p className="difficulty-caption">
+                  {draft.difficulty ? DIFFICULTY_LABELS[draft.difficulty] : "きつさを選択"}
+                </p>
+              </>
+            )}
+            <button type="submit" className="btn primary save-btn" disabled={saving || !draft}>
+              <Icon>
+                <SaveIcon />
+              </Icon>
+              {saving ? "保存しています…" : "保存"}
+            </button>
+            {error && <p className="form-error">{error}</p>}
+          </form>
+
+          <button type="button" className="skip-btn" onClick={leave}>
+            スキップ
+            <Icon>
+              <ChevronDownIcon />
+            </Icon>
+          </button>
+        </>
+      )}
+
+      {confirmDiscard && (
+        <Modal
+          titleId="discard-title"
+          title="変更を破棄しますか？"
+          body="入力した内容は保存されません。"
+          cancelLabel="戻って編集"
+          confirmLabel="破棄する"
+          onCancel={() => setConfirmDiscard(false)}
+          onConfirm={back}
+        />
+      )}
+    </section>
+  );
+}
