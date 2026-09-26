@@ -2,6 +2,8 @@ import {
   PAGE_TITLE,
   isDifficulty,
   isISODate,
+  isValidCount,
+  isValidWeightKg,
   type ExerciseLog,
   type ExerciseSummary,
   type NewExerciseLog,
@@ -55,9 +57,9 @@ export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
     async createLog(input: NewExerciseLog) {
       const exercise = assertName(input.exercise);
       if (!isISODate(input.date)) throw new Error("日付が不正です");
-      if (!(input.weightKg > 0) || input.weightKg > 999) throw new Error("重量を確認してください");
-      if (!Number.isInteger(input.reps) || input.reps <= 0) throw new Error("回数を確認してください");
-      if (!Number.isInteger(input.sets) || input.sets <= 0) throw new Error("セット数を確認してください");
+      if (!isValidWeightKg(input.weightKg)) throw new Error("重量を確認してください");
+      if (!isValidCount(input.reps)) throw new Error("回数を確認してください");
+      if (!isValidCount(input.sets)) throw new Error("セット数を確認してください");
       if (!isDifficulty(input.difficulty)) throw new Error("きつさを選択してください");
 
       const createdAt = new Date().toISOString();

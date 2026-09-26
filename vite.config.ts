@@ -39,6 +39,6 @@ export default defineConfig({
   preview: { host: true, port: 4173 },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "worker/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "worker/**/*.test.ts", "scripts/**/*.test.mjs"],
   },
 });

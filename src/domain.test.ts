@@ -27,9 +27,13 @@ describe("dates and labels", () => {
     expect(parseWeight("82.5")).toBe(82.5);
     expect(parseWeight("82,5")).toBe(82.5);
     expect(parseWeight("0")).toBeNull();
+    expect(parseWeight("-20")).toBeNull();
+    expect(parseWeight("1000")).toBeNull();
     expect(parseWeight("1.234")).toBeNull();
     expect(parseCount("11")).toBe(11);
     expect(parseCount("0")).toBeNull();
+    expect(parseCount("1.5")).toBeNull();
+    expect(parseCount("1000")).toBeNull();
   });
 
   it("summarizes a previous set", () => {

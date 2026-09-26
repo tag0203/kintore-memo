@@ -48,12 +48,13 @@ describe("worker HTTP API", () => {
   });
 
   it("creates a log through the injected client", async () => {
+    let created = 0;
     const response = await handleRequest(
       new Request("https://app.example/api/logs", {
         method: "POST",
         body: JSON.stringify({
           exercise: "スクワット",
-          weightKg: 80,
+          weightKg: 82.5,
           reps: 11,
           sets: 3,
           difficulty: 3,
@@ -61,11 +62,64 @@ describe("worker HTTP API", () => {
         }),
       }),
       {},
-      { createClient: () => client() },
+      {
+        createClient: () =>
+          client({
+            async createLog(input) {
+              created += 1;
+              return {
+                id: "log-1",
+                exercise: input.exercise,
+                weightKg: input.weightKg,
+                reps: input.reps,
+                sets: input.sets,
+                difficulty: input.difficulty,
+                date: input.date,
+                title: input.title ?? "－",
+                createdAt: "2026-09-26T00:00:00.000Z",
+              };
+            },
+          }),
+      },
     );
     expect(response.status).toBe(201);
-    const body = (await response.json()) as { exercise: string; title: string };
-    expect(body).toMatchObject({ exercise: "スクワット", title: "－" });
+    expect(created).toBe(1);
+    const body = (await response.json()) as { exercise: string; weightKg: number; title: string };
+    expect(body).toMatchObject({ exercise: "スクワット", weightKg: 82.5, title: "－" });
+  });
+
+  it.each([
+    { weightKg: -20, reps: 11, sets: 3 },
+    { weightKg: 80, reps: 1.5, sets: 3 },
+    { weightKg: 80, reps: 11, sets: 0 },
+    { weightKg: 0, reps: 11, sets: 3 },
+    { weightKg: 1000, reps: 11, sets: 3 },
+    { weightKg: 80, reps: 1000, sets: 3 },
+  ])("rejects %j before creating a Notion row", async (override) => {
+    let created = 0;
+    const response = await handleRequest(
+      new Request("https://app.example/api/logs", {
+        method: "POST",
+        body: JSON.stringify({
+          exercise: "スクワット",
+          difficulty: 3,
+          date: "2026-09-26",
+          ...override,
+        }),
+      }),
+      {},
+      {
+        createClient: () =>
+          client({
+            async createLog() {
+              created += 1;
+              throw new Error("Notion create should not run");
+            },
+          }),
+      },
+    );
+    expect(response.status).toBe(400);
+    expect(created).toBe(0);
   });
 
   it("rejects an unknown route", async () => {

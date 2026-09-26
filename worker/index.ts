@@ -1,4 +1,4 @@
-import { isDifficulty, isISODate, type NewExerciseLog } from "../src/domain";
+import { isDifficulty, isISODate, isValidCount, isValidWeightKg, type NewExerciseLog } from "../src/domain";
 import type { WorkoutLogClient } from "../src/data/client";
 import type { NotionEnv } from "./env";
 import { createNotionClient } from "./notionClient";
@@ -31,9 +31,9 @@ function readCreateBody(value: unknown): NewExerciseLog | null {
   if (!value || typeof value !== "object") return null;
   const body = value as Record<string, unknown>;
   if (typeof body.exercise !== "string") return null;
-  if (typeof body.weightKg !== "number") return null;
-  if (typeof body.reps !== "number") return null;
-  if (typeof body.sets !== "number") return null;
+  if (typeof body.weightKg !== "number" || !isValidWeightKg(body.weightKg)) return null;
+  if (typeof body.reps !== "number" || !isValidCount(body.reps)) return null;
+  if (typeof body.sets !== "number" || !isValidCount(body.sets)) return null;
   if (typeof body.difficulty !== "number" || !isDifficulty(body.difficulty)) return null;
   if (typeof body.date !== "string" || !isISODate(body.date)) return null;
   if (body.title !== undefined && typeof body.title !== "string") return null;

@@ -84,11 +84,23 @@ export function formatSetSummary(log: Pick<ExerciseLog, "weightKg" | "reps" | "s
   return `${formatWeight(log.weightKg)}kg × ${log.reps} × ${log.sets}`;
 }
 
+/** 画面の重量入力と同じ。0 より大きく 999 以下、小数は2桁まで。 */
+export function isValidWeightKg(value: number): boolean {
+  if (!Number.isFinite(value) || value <= 0 || value > 999) return false;
+  const cents = Math.round(value * 100);
+  return Math.abs(value * 100 - cents) < 1e-6;
+}
+
+/** 画面の回数・セット入力と同じ。1 以上 999 以下の整数。 */
+export function isValidCount(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= 999;
+}
+
 export function parseWeight(raw: string): number | null {
   const text = raw.trim().replace(/,/g, ".");
   if (!/^\d+(\.\d{1,2})?$/.test(text)) return null;
   const value = Number(text);
-  if (value <= 0 || value > 999) return null;
+  if (!isValidWeightKg(value)) return null;
   return Math.round(value * 100) / 100;
 }
 
@@ -96,7 +108,7 @@ export function parseCount(raw: string): number | null {
   const text = raw.trim();
   if (!/^\d+$/.test(text)) return null;
   const value = Number(text);
-  if (value <= 0 || value > 999) return null;
+  if (!isValidCount(value)) return null;
   return value;
 }
 
