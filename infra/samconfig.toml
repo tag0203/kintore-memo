@@ -1,0 +1,26 @@
+# samconfig.toml — defaults for local sam build / deploy.
+# Override with CLI flags when needed. Do not put secrets here.
+
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+[default.deploy.parameters]
+stack_name = "kintore-memo-dev"
+resolve_s3 = true
+capabilities = "CAPABILITY_IAM"
+region = "ap-northeast-1"
+confirm_changeset = true
+fail_on_empty_changeset = false
+parameter_overrides = "ProjectName=kintore-memo Environment=dev LogRetentionDays=14"
+
+[default.local_start_api.parameters]
+warm_containers = "EAGER"
+
+[default.sync.parameters]
+watch = true

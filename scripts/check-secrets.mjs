@@ -6,14 +6,20 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const banned = [/NOTION_TOKEN/, /NOTION_DATABASE_ID/, /api\.notion\.com/, /VITE_NOTION/, /ntn_[A-Za-z0-9]/, /secret_[A-Za-z0-9]/];
 const allowed = new Set(["README.md", ".env.example", "wrangler.toml", "scripts/check-secrets.mjs"]);
-const skipDirNames = new Set(["node_modules", ".git", ".wrangler", "coverage", "dev-dist"]);
+const skipDirNames = new Set(["node_modules", ".git", ".wrangler", ".aws-sam", "coverage", "dev-dist"]);
 
 function rel(root, path) {
   return relative(root, path).split("\\").join("/");
 }
 
 function isAllowed(path) {
-  return path.startsWith("worker/") || allowed.has(path);
+  return (
+    path.startsWith("worker/") ||
+    path.startsWith("backend/") ||
+    path.startsWith("infra/") ||
+    path.startsWith("docs/") ||
+    allowed.has(path)
+  );
 }
 
 function isLocalEnvFile(pathRel) {
