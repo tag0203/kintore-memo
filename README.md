@@ -2,6 +2,8 @@
 
 前回の重量・回数・セット・きつさを見ながら、今日のトレーニングを1行ずつ残すための薄い Web アプリです。記録の置き場は Notion を想定しています。このリポジトリはローカルで画面を動かす土台で、デプロイはしていません。
 
+本番は AWS に置きます。Cloudflare はドメインの DNS だけです。方針は [docs/architecture-aws.md](docs/architecture-aws.md) にまとめてあります。
+
 ## 画面
 
 1. **今日のトレーニング** … 日付、任意の部位メモ、今日の種目。各種目に前回の `重量 × 回数 × セット` と、未 / 記録済。
@@ -34,17 +36,17 @@ npm run dev
 
 ## データの境界
 
+いま動く経路はインメモリのモックです。`worker/` の Notion 実装は参考で、本番経路ではありません。本番は API Gateway から Lambda へ進み、トークンは SSM に置きます。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
+
 ```text
 ブラウザ（React）
   WorkoutLogClient
     └─ インメモリのモック   ← いま動く経路。src/data/browserClient.ts
 
-Cloudflare Worker（未接続）
-  同じ WorkoutLogClient
+参考: Cloudflare Worker（本番では使わない）
+  同じ WorkoutLogClient の形
     └─ Notion 実装         ← worker/notionClient.ts
-         NOTION_TOKEN
-         NOTION_DATABASE_ID
-              └─ Notion API 2026-03-11
+         └─ Notion API 2026-03-11
 ```
 
 画面は `src/data/client.ts` の `WorkoutLogClient` だけを見ます。Notion の URL やトークンを読むコードは `worker/` にしかありません。Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` のキーに `VITE_` は付けていません。
@@ -53,15 +55,16 @@ Cloudflare Worker（未接続）
 | --- | --- |
 | 種目・重量・回数・セット数・きつさ・日付・タイトル | Notion の1行。保存のたびに追加（上書きしない） |
 | 前回 | その種目で、今日より前の最新1行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | ブラウザのセッション。指定スキーマに列が無いため |
+| 今日のメニュー、部位メモ、終了 / 再開 | いまはブラウザのセッション。本番は DynamoDB（[#6](https://github.com/tag0203/kintore-memo/issues/6)、設計は [#11](https://github.com/tag0203/kintore-memo/issues/11)） |
 
 モックの「最近」は、ピッカーで選んだ順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
 
 ## シークレット
 
-- 本物のトークンやデータベース ID を git、フロントのソース、`VITE_` 変数に置かない。
+- 本物のトークンやデータベース ID を git、フロントのソース、`VITE_` 変数、Issue に置かない。
 - ローカル用の控えが要る場合も `.env` に書き、コミットしない（`.gitignore` 済み）。
-- Worker へ渡すときはファイルではなくシークレットにする。
+- 本番では SSM Parameter Store の SecureString に置き、Lambda だけが読む。
+- `worker/` は参考実装です。手元で試すときだけ、ファイルではなく Worker のシークレットにします。
 
 ```bash
 npx wrangler secret put NOTION_TOKEN
@@ -72,7 +75,7 @@ npx wrangler secret put NOTION_DATABASE_ID
 
 ## Notion の形
 
-データベースをインテグレーションに共有します。Worker は API `2026-03-11` でデータベースを開き、先頭のデータソースを使います。プロパティ名は次の通りです。括弧は全角です。
+データベースをインテグレーションに共有します。参考実装の `worker/` は API `2026-03-11` でデータベースを開き、先頭のデータソースを使います。プロパティ名は次の通りです。括弧は全角です。Lambda へ移植するときもこの列を使います。
 
 | プロパティ | 型 | 内容 |
 | --- | --- | --- |
@@ -86,19 +89,8 @@ npx wrangler secret put NOTION_DATABASE_ID
 
 新しい種目名は、最初の保存でセレクトの選択肢として足されます。それまで今日のメニューには載りますが、Notion には行がありません。
 
-## Cloudflare への次の段階
+## AWS への次の段階
 
-このリポジトリは Pages にも Workers にも載せていません。`wrangler.toml` は雛形です。
+Pages にも Workers にも載せません。`worker/` と `wrangler.toml` は参考実装のまま残します。本番は CloudFront と S3、API Gateway、Lambda、Cognito、DynamoDB です。
 
-1. 上のスキーマで Notion データベースを作る。
-2. `NOTION_TOKEN` と `NOTION_DATABASE_ID` を Worker のシークレットにする。オリジンが分かれる場合だけ `ALLOWED_ORIGIN` を足す。
-3. Worker はすでに次の API を持っています。画面はまだ呼びません。
-   - `GET /api/health`
-   - `GET /api/exercises`
-   - `GET /api/exercises/recent`
-   - `GET /api/logs/previous?exercise=&before=YYYY-MM-DD`
-   - `GET /api/logs/today?exercise=&date=YYYY-MM-DD`
-   - `POST /api/logs`
-4. 静的ファイルは `npm run build` の `dist/` を Cloudflare Pages に置く。
-5. 画面側は `createBrowserClient` を、この API を叩く `WorkoutLogClient` に差し替える。差し替え先もトークンを持たない。
-6. `npm run check:secrets` をビルド後にも通し、`dist/` にトークンや Notion の URL が無いことを確認する。
+何をどの順で作るかは [docs/architecture-aws.md](docs/architecture-aws.md) に書いてあります。入口は [#7](https://github.com/tag0203/kintore-memo/issues/7) で、実装は [#8](https://github.com/tag0203/kintore-memo/issues/8) 以降です。

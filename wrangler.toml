@@ -1,4 +1,4 @@
-# まだデプロイしない。Cloudflare Workers へつなぐときの雛形。
+# 参考実装。本番経路ではない（本番は AWS。docs/architecture-aws.md）。
 # シークレットはここに書かない。
 #   npx wrangler secret put NOTION_TOKEN
 #   npx wrangler secret put NOTION_DATABASE_ID
