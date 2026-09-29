@@ -65,6 +65,8 @@ export function humanizeCognitoError(code: string, message?: string): string {
     case "LimitExceededException":
     case "TooManyRequestsException":
       return "試行回数が多すぎます。しばらくしてから再度お試しください";
+    case "ResourceNotFoundException":
+      return "Cognito の設定（User Pool / App Client）を確認してください";
     default:
       return message?.trim() || `認証に失敗しました（${code}）`;
   }
