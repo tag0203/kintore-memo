@@ -32,7 +32,7 @@ Globals:
 
 Resources:
   # ---------------------------------------------------------------------------
-  # Cognito (JWT for API Gateway; Hosted UI / SPA login wiring is #9)
+  # Cognito (JWT for API Gateway; SPA custom login form is #9)
   # ---------------------------------------------------------------------------
   UserPool:
     Type: AWS::Cognito::UserPool
@@ -127,6 +127,9 @@ Resources:
       CorsConfiguration:
         AllowOrigins:
           - !Sub https://${SpaDistribution.DomainName}
+          # Local SPA (npm run dev / preview) against a deployed API
+          - http://localhost:5173
+          - http://localhost:4173
         AllowHeaders:
           - Authorization
           - Content-Type
@@ -135,6 +138,7 @@ Resources:
           - POST
           - OPTIONS
         MaxAge: 600
+        AllowCredentials: false
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment
