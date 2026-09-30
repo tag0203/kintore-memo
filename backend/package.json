@@ -1,0 +1,8 @@
+{
+  "name": "kintore-memo-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lambda handlers for kintore-memo (skeleton). Notion wiring is #10.",
+  "main": "index.mjs"
+}

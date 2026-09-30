@@ -69,6 +69,24 @@ describe("secret check", () => {
     }
   });
 
+  it("allows AWS infra, backend, and docs to name SSM parameters", () => {
+    const root = writeTree({
+      "infra/template.yaml": `${tokenName}_PARAM: /app/dev/notion/token\n`,
+      "backend/index.mjs": `process.env.${tokenName}_PARAM\n`,
+      "docs/aws-deploy.md": "aws ssm put-parameter --name /app/dev/notion/token\n",
+      "src/app.ts": "export const label = 'スクワット';\n",
+    });
+    try {
+      expect(
+        findLeaks(root, {
+          tracked: new Set(["infra/template.yaml", "backend/index.mjs", "docs/aws-deploy.md", "src/app.ts"]),
+        }),
+      ).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("checks an isolated git repo and keeps that repo's .env", () => {
     withWorkspaceEnvPreserved(() => {
       const root = mkdtempSync(join(tmpdir(), "kintore-secrets-repo-"));

@@ -93,4 +93,13 @@ npx wrangler secret put NOTION_DATABASE_ID
 
 Pages にも Workers にも載せません。`worker/` と `wrangler.toml` は参考実装のまま残します。本番は CloudFront と S3、API Gateway、Lambda、Cognito、DynamoDB です。
 
-何をどの順で作るかは [docs/architecture-aws.md](docs/architecture-aws.md) に書いてあります。入口は [#7](https://github.com/tag0203/kintore-memo/issues/7) で、実装は [#8](https://github.com/tag0203/kintore-memo/issues/8) 以降です。
+方針は [docs/architecture-aws.md](docs/architecture-aws.md) です。最小の IaC（AWS SAM）は `infra/template.yaml` にあり、デプロイと `sam local` の手順は [docs/aws-deploy.md](docs/aws-deploy.md) です。
+
+```bash
+cd infra
+sam validate --lint
+sam build
+sam deploy
+```
+
+後続は Cognito ログイン（[#9](https://github.com/tag0203/kintore-memo/issues/9)）、Lambda の Notion API（[#10](https://github.com/tag0203/kintore-memo/issues/10)）、DynamoDB 設計（[#11](https://github.com/tag0203/kintore-memo/issues/11)）です。

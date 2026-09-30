@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-実装はまだありません。IaC とコードは後続の Issue です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md) です。Notion API・認証 UI・画面差し替えは後続 Issue です。
 
 ## 目的
 
@@ -86,25 +86,27 @@ flowchart TB
 | Cognito User Pool | ログイン。JWT を発行する |
 | JWT Authorizer | API Gateway がトークンを検証する。Lambda に独自認証を積まない |
 | DynamoDB | オンデマンド。アプリ固有データと、任意の短い TTL キャッシュ |
-| SSM Parameter Store | Notion のトークンとデータベース ID。SecureString |
+| SSM Parameter Store | Notion のトークンとデータベース ID。SecureString。名前と IAM は SAM。値は CFN が SecureString を作れないため CLI で作成（[aws-deploy.md](./aws-deploy.md)） |
 | CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
 | GitHub Actions + OIDC | デプロイ。長期のアクセスキーは置かない |
 
-IaC の第一候補は **AWS SAM** です。S3 から Cognito まで一枚にまとめる方が楽なら CDK でもよいです。どちらにするかは [#8](https://github.com/tag0203/kintore-memo/issues/8) で決め、コンソールだけで作ったリソースは残しません。
+IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
-## ディレクトリ構成案
+## ディレクトリ構成
 
-この文書ではディレクトリを作りません。次の Issue で足すときの置き場です。いまの SPA はリポジトリ直下のままにします。`frontend/` への移動は必須ではありません。
+SPA はリポジトリ直下のままです。`frontend/` への移動は必須ではありません。
 
 ```text
 src/                    既存の SPA
 public/
 worker/                 参考実装。本番経路にしない
-backend/                Lambda ハンドラと Notion クライアント（#10）
-infra/template.yaml     SAM（#8）。CDK にするなら infra/ をそのアプリにする
+backend/                Lambda（骨格。Notion クライアントは #10）
+infra/template.yaml     SAM（#8）
+infra/samconfig.toml
 docs/architecture-aws.md
+docs/aws-deploy.md
 .github/workflows/      OIDC デプロイ（#14）
 ```
 
@@ -129,7 +131,7 @@ Notion の列名と型は README の「Notion の形」が正です。実デー�
 
 | 値 | 置き場 |
 | --- | --- |
-| Notion トークン、データベース ID | SSM Parameter Store の SecureString。読むのは Lambda だけ |
+| Notion トークン、データベース ID | SSM Parameter Store の SecureString。読むのは Lambda だけ。名前と IAM は SAM。値は CLI で作成（CFN は SecureString 非対応） |
 | Cognito のクライアント ID、API のベース URL | ブラウザに出てよい。秘密ではない |
 | ローカルの控え | `.env`（gitignore 済み）。コミットしない |
 
@@ -141,11 +143,12 @@ Lambda の IAM は、そのパラメータの `GetParameter` と、そのテー�
 
 個人利用ですが、学習サンプルとしてログインを付けます。
 
-1. SPA が Cognito User Pool でメールとパスワードのログインをする。Hosted UI でも自前フォームでもよい。単純な方を採る。ソーシャルログインは後回し。
-2. 取れた JWT を `Authorization: Bearer` で API Gateway に付ける。
-3. HTTP API の JWT Authorizer が発行者と audience を検証する。
-4. 通ったリクエストだけが Lambda に届く。
-5. 未認証は API Gateway が拒否する。
+1. Cognito User Pool は自己登録を禁止する（`AllowAdminCreateUserOnly`）。利用するユーザーは管理者が作成する。
+2. SPA が Cognito User Pool でメールとパスワードのログインをする。Hosted UI でも自前フォームでもよい。単純な方を採る。ソーシャルログインは後回し。
+3. 取れた JWT を `Authorization: Bearer` で API Gateway に付ける。
+4. HTTP API の JWT Authorizer が発行者と audience を検証する。
+5. 通ったリクエストだけが Lambda に届く。
+6. 未認証は API Gateway が拒否する。
 
 手順の詳細は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
 

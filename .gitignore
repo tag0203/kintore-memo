@@ -2,9 +2,11 @@ node_modules
 dist
 dev-dist
 .wrangler
+.aws-sam
 .env
 .env.*
 !.env.example
+infra/env.json
 *.log
 .DS_Store
 .tsbuildinfo

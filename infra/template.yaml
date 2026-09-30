@@ -1,0 +1,392 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  kintore-memo — minimal AWS skeleton (issue #8).
+  S3+CloudFront+OAC, HTTP API+Lambda, Cognito JWT Authorizer,
+  DynamoDB On-Demand, SSM SecureString, CloudWatch Logs with retention.
+  Notion API wiring is out of scope (#10). Custom domain / ACM is #13.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: kintore-memo
+    Description: Prefix for resource names.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name (one stack per environment).
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    AllowedValues: [7, 14]
+    Description: CloudWatch Logs retention for the API Lambda.
+
+Globals:
+  Function:
+    Runtime: nodejs22.x
+    Architectures: [arm64]
+    Timeout: 10
+    MemorySize: 256
+    Tracing: PassThrough
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Cognito (JWT for API Gateway; Hosted UI / SPA login wiring is #9)
+  # ---------------------------------------------------------------------------
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${ProjectName}-${Environment}
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      # Personal app: block public SignUp; create the sole user with AdminCreateUser (#9).
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${ProjectName}-${Environment}-spa
+      UserPoolId: !Ref UserPool
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders: [COGNITO]
+      AccessTokenValidity: 1
+      IdTokenValidity: 1
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: hours
+        IdToken: hours
+        RefreshToken: days
+
+  # ---------------------------------------------------------------------------
+  # DynamoDB (single-table placeholder; entity design is #11)
+  # ---------------------------------------------------------------------------
+  AppTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ProjectName}-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ---------------------------------------------------------------------------
+  # HTTP API + JWT Authorizer + Lambda
+  # ---------------------------------------------------------------------------
+  # SSM SecureString for Notion token / database id cannot be created by
+  # CloudFormation (String / StringList only). Names + IAM are defined here;
+  # create the SecureString values after deploy — see docs/aws-deploy.md.
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      Auth:
+        DefaultAuthorizer: CognitoJwtAuthorizer
+        Authorizers:
+          CognitoJwtAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience:
+                - !Ref UserPoolClient
+            IdentitySource: $request.header.Authorization
+      CorsConfiguration:
+        AllowOrigins:
+          - !Sub https://${SpaDistribution.DomainName}
+        AllowHeaders:
+          - Authorization
+          - Content-Type
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        MaxAge: 600
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-${Environment}-api
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Explicit role so SAM does not attach AWSLambdaBasicExecutionRole (logs:* on *).
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-api
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApiFunctionAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt ApiFunctionLogGroup.Arn
+                  - !Sub "${ApiFunctionLogGroup.Arn}:*"
+              - Sid: DynamoDBCrud
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !GetAtt AppTable.Arn
+                  - !Sub "${AppTable.Arn}/index/*"
+              - Sid: ReadNotionSecureStrings
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/database-id
+              - Sid: DecryptSecureStringViaSsm
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ApiFunctionLogGroup
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${Environment}-api
+      CodeUri: ../backend/
+      Handler: index.handler
+      Role: !GetAtt ApiFunctionRole.Arn
+      Description: kintore-memo API skeleton (health only; Notion in #10)
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref AppTable
+          NOTION_TOKEN_PARAM: !Sub /${ProjectName}/${Environment}/notion/token
+          NOTION_DATABASE_ID_PARAM: !Sub /${ProjectName}/${Environment}/notion/database-id
+          ALLOWED_ORIGIN: !Sub https://${SpaDistribution.DomainName}
+          ENVIRONMENT: !Ref Environment
+      Events:
+        HealthGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/health
+            Method: GET
+            Auth:
+              Authorizer: NONE
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+            Auth:
+              Authorizer: CognitoJwtAuthorizer
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # ---------------------------------------------------------------------------
+  # S3 (private) + CloudFront + OAC
+  # ---------------------------------------------------------------------------
+  SpaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${ProjectName}-${Environment}-spa-${AWS::AccountId}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  SpaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${ProjectName}-${Environment}-spa-oac
+        Description: OAC for private SPA bucket
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  SpaDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ${ProjectName} ${Environment} SPA
+        DefaultRootObject: index.html
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: PriceClass_200
+        Origins:
+          - Id: SpaS3Origin
+            DomainName: !GetAtt SpaBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt SpaOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: SpaS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # Managed-CachingOptimized
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+
+  SpaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SpaBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontReadViaOAC
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub ${SpaBucket.Arn}/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${SpaDistribution}
+
+Outputs:
+  StackEnvironment:
+    Description: Environment name for this stack
+    Value: !Ref Environment
+
+  SpaBucketName:
+    Description: S3 bucket for SPA static files (sync dist/ here)
+    Value: !Ref SpaBucket
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID (for cache invalidation)
+    Value: !Ref SpaDistribution
+
+  CloudFrontDomainName:
+    Description: CloudFront domain for the SPA
+    Value: !GetAtt SpaDistribution.DomainName
+
+  SpaUrl:
+    Description: HTTPS URL for the SPA
+    Value: !Sub https://${SpaDistribution.DomainName}
+
+  HttpApiUrl:
+    Description: HTTP API base URL
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}
+
+  HttpApiId:
+    Description: HTTP API ID
+    Value: !Ref HttpApi
+
+  ApiFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt ApiFunction.Arn
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref UserPool
+
+  UserPoolClientId:
+    Description: Cognito App Client ID (safe to embed in the SPA)
+    Value: !Ref UserPoolClient
+
+  UserPoolIssuer:
+    Description: JWT issuer URL for the User Pool
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+
+  AppTableName:
+    Description: DynamoDB table name
+    Value: !Ref AppTable
+
+  NotionTokenParameterName:
+    Description: SSM SecureString name for the Notion token (create after deploy; see docs/aws-deploy.md)
+    Value: !Sub /${ProjectName}/${Environment}/notion/token
+
+  NotionDatabaseIdParameterName:
+    Description: SSM SecureString name for the Notion database ID (create after deploy; see docs/aws-deploy.md)
+    Value: !Sub /${ProjectName}/${Environment}/notion/database-id
+
+  ApiLogGroupName:
+    Description: CloudWatch Log Group for the API Lambda
+    Value: !Ref ApiFunctionLogGroup
