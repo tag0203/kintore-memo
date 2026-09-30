@@ -13,7 +13,8 @@ lint = true
 [default.deploy.parameters]
 stack_name = "kintore-memo-dev"
 resolve_s3 = true
-capabilities = "CAPABILITY_IAM"
+# Named IAM Role (ApiFunctionRole.RoleName) requires CAPABILITY_NAMED_IAM.
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 region = "ap-northeast-1"
 confirm_changeset = true
 fail_on_empty_changeset = false
