@@ -12,7 +12,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開 |
 | Lambda | `/api/health` が応答。他の `/api/*` は 501（実装は #10） |
-| Cognito User Pool + App Client | JWT 発行。ログイン UI は #9 |
+| Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。ユーザー作成とログイン UI は #9 |
 | DynamoDB | オンデマンド。`pk` / `sk` + TTL。エンティティ設計は #11 |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
 | CloudWatch Logs | Lambda ログ。保持 7 または 14 日（既定 14） |
@@ -95,9 +95,10 @@ aws ssm put-parameter \
 
 ### SPA をバケットへ載せる（任意）
 
-骨格だけなら空のバケットで構いません。画面を載せるとき:
+骨格だけなら空のバケットで構いません。画面を載せるとき（**リポジトリルート**で実行。直前の手順で `cd infra` している場合は先に戻る）:
 
 ```bash
+cd ..   # infra/ にいる場合。成果物はリポジトリルートの dist/
 npm run build
 SPA_BUCKET=$(aws cloudformation describe-stacks \
   --stack-name kintore-memo-dev \
@@ -124,7 +125,7 @@ curl -sS "${API_URL}/api/health"
 # {"ok":true,"service":"kintore-memo","stage":"skeleton",...}
 ```
 
-`/api/health` 以外は JWT が無いと 401 です。Cognito ユーザー作成とログイン手順は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
+`/api/health` 以外は JWT が無いと 401 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成とログイン手順は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
 
 ## ローカル（sam local）
 

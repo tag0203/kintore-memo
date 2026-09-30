@@ -143,11 +143,12 @@ Lambda の IAM は、そのパラメータの `GetParameter` と、そのテー�
 
 個人利用ですが、学習サンプルとしてログインを付けます。
 
-1. SPA が Cognito User Pool でメールとパスワードのログインをする。Hosted UI でも自前フォームでもよい。単純な方を採る。ソーシャルログインは後回し。
-2. 取れた JWT を `Authorization: Bearer` で API Gateway に付ける。
-3. HTTP API の JWT Authorizer が発行者と audience を検証する。
-4. 通ったリクエストだけが Lambda に届く。
-5. 未認証は API Gateway が拒否する。
+1. Cognito User Pool は自己登録を禁止する（`AllowAdminCreateUserOnly`）。利用するユーザーは管理者が作成する。
+2. SPA が Cognito User Pool でメールとパスワードのログインをする。Hosted UI でも自前フォームでもよい。単純な方を採る。ソーシャルログインは後回し。
+3. 取れた JWT を `Authorization: Bearer` で API Gateway に付ける。
+4. HTTP API の JWT Authorizer が発行者と audience を検証する。
+5. 通ったリクエストだけが Lambda に届く。
+6. 未認証は API Gateway が拒否する。
 
 手順の詳細は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
 

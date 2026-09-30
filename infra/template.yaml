@@ -40,6 +40,9 @@ Resources:
       UserPoolName: !Sub ${ProjectName}-${Environment}
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
+      # Personal app: block public SignUp; create the sole user with AdminCreateUser (#9).
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
       Policies:
         PasswordPolicy:
           MinimumLength: 8
@@ -142,6 +145,63 @@ Resources:
       LogGroupName: !Sub /aws/lambda/${ProjectName}-${Environment}-api
       RetentionInDays: !Ref LogRetentionDays
 
+  # Explicit role so SAM does not attach AWSLambdaBasicExecutionRole (logs:* on *).
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${Environment}-api
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApiFunctionAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: WriteOwnLogGroup
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !GetAtt ApiFunctionLogGroup.Arn
+                  - !Sub "${ApiFunctionLogGroup.Arn}:*"
+              - Sid: DynamoDBCrud
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:ConditionCheckItem
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !GetAtt AppTable.Arn
+                  - !Sub "${AppTable.Arn}/index/*"
+              - Sid: ReadNotionSecureStrings
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/database-id
+              - Sid: DecryptSecureStringViaSsm
+                Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
   ApiFunction:
     Type: AWS::Serverless::Function
     DependsOn: ApiFunctionLogGroup
@@ -149,6 +209,7 @@ Resources:
       FunctionName: !Sub ${ProjectName}-${Environment}-api
       CodeUri: ../backend/
       Handler: index.handler
+      Role: !GetAtt ApiFunctionRole.Arn
       Description: kintore-memo API skeleton (health only; Notion in #10)
       Environment:
         Variables:
@@ -157,26 +218,6 @@ Resources:
           NOTION_DATABASE_ID_PARAM: !Sub /${ProjectName}/${Environment}/notion/database-id
           ALLOWED_ORIGIN: !Sub https://${SpaDistribution.DomainName}
           ENVIRONMENT: !Ref Environment
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref AppTable
-        - Version: "2012-10-17"
-          Statement:
-            - Sid: ReadNotionSecureStrings
-              Effect: Allow
-              Action:
-                - ssm:GetParameter
-              Resource:
-                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/token
-                - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/notion/database-id
-            - Sid: DecryptSecureStringViaSsm
-              Effect: Allow
-              Action:
-                - kms:Decrypt
-              Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm
-              Condition:
-                StringEquals:
-                  kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
       Events:
         HealthGet:
           Type: HttpApi

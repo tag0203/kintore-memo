@@ -4,6 +4,9 @@
  *
  * Public:  GET /api/health
  * Auth:    other /api/* (JWT via API Gateway; stub returns 501)
+ *
+ * HTTP API payload v2 puts the stage name on rawPath (e.g. /dev/api/health).
+ * Prefer routeKey, which is stage-independent ("GET /api/health").
  */
 
 const json = (statusCode, body, headers = {}) => ({
@@ -15,11 +18,27 @@ const json = (statusCode, body, headers = {}) => ({
   body: JSON.stringify(body),
 });
 
+/** Strip named-stage prefix from HTTP API v2 rawPath when present. */
+export function resolvePath(event) {
+  const rawPath = event.rawPath ?? event.path ?? "/";
+  const stage = event.requestContext?.stage;
+  if (stage && stage !== "$default" && rawPath.startsWith(`/${stage}/`)) {
+    return rawPath.slice(stage.length + 1) || "/";
+  }
+  return rawPath;
+}
+
+export function isHealthGet(event) {
+  if (event.routeKey === "GET /api/health") return true;
+  const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
+  return method === "GET" && resolvePath(event) === "/api/health";
+}
+
 export const handler = async (event) => {
   const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
-  const path = event.rawPath ?? event.path ?? "/";
+  const path = resolvePath(event);
 
-  if (method === "GET" && path === "/api/health") {
+  if (isHealthGet(event)) {
     return json(200, {
       ok: true,
       service: "kintore-memo",
