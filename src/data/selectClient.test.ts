@@ -21,7 +21,7 @@ describe("selectWorkoutClient", () => {
   });
 
   it("uses the HTTP client only after sign-in when the API URL is set", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () =>
       Response.json({
         date: "2026-10-02",
         exercises: [{ name: "デッドリフト", lastPickedAt: null }],
@@ -48,8 +48,8 @@ describe("selectWorkoutClient", () => {
       });
       await signedIn.getPreviousLog("デッドリフト", "2026-10-02");
       expect(fetchMock).toHaveBeenCalledOnce();
-      const init = fetchMock.mock.calls[0][1] as RequestInit;
-      expect(new Headers(init.headers).get("Authorization")).toBe("Bearer id-token");
+      const init = fetchMock.mock.calls[0][1];
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer id-token");
     } finally {
       vi.unstubAllGlobals();
     }
