@@ -1,0 +1,342 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Bootstrap IAM for GitHub Actions OIDC deploy (issue #14).
+  Apply once from an admin principal in ap-northeast-1. Do not sam-deploy this from Actions.
+  The app workflow assumes kintore-memo-gha-deploy and must not use access keys.
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: tag0203
+    AllowedPattern: "^[A-Za-z0-9-]+$"
+    Description: GitHub user or organization name.
+  GitHubRepo:
+    Type: String
+    Default: kintore-memo
+    AllowedPattern: "^[A-Za-z0-9._-]+$"
+    Description: GitHub repository name.
+  GitHubOwnerId:
+    Type: String
+    Default: "20207728"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub owner id (OIDC sub claim).
+  GitHubRepoId:
+    Type: String
+    Default: "1389679197"
+    AllowedPattern: "^[0-9]+$"
+    Description: Immutable GitHub repository id (OIDC sub claim).
+  AllowedBranch:
+    Type: String
+    Default: main
+    AllowedPattern: "^[A-Za-z0-9._/-]+$"
+    Description: Branch ref the deploy role will trust (workflow runs from main).
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create the GitHub OIDC provider. Set false when this account already has one.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+    Description: Provider ARN to reuse when CreateOidcProvider is false.
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Rules:
+  ExistingProviderWhenReuse:
+    Assertions:
+      - Assert:
+          Fn::Or:
+            - Fn::Equals: [!Ref CreateOidcProvider, "true"]
+            - Fn::Not:
+                - Fn::Equals: [!Ref ExistingOidcProviderArn, ""]
+        AssertDescription: Set ExistingOidcProviderArn when CreateOidcProvider is false.
+
+Resources:
+  # One provider per URL per account. ThumbprintList is omitted; IAM fetches the CA thumbprint.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: kintore-memo
+        - Key: Purpose
+          Value: github-actions-oidc
+
+  # Role name is fixed and does not match kintore-memo-*-api, so this role cannot edit itself.
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: kintore-memo-gha-deploy
+      Description: GitHub Actions OIDC deploy for kintore-memo. Assumes no access keys.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - ShouldCreateOidcProvider
+                - !Ref GitHubOidcProvider
+                - !Ref ExistingOidcProviderArn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}"
+      Policies:
+        - PolicyName: GitHubDeploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudFormationAppAndSamArtifactStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ListStackResources
+                  - cloudformation:ListChangeSets
+                  - cloudformation:ContinueUpdateRollback
+                  - cloudformation:TagResource
+                  - cloudformation:UntagResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/kintore-memo-dev/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/kintore-memo-staging/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/kintore-memo-prod/*
+                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*
+              - Sid: CloudFormationSamTransform
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+              - Sid: ValidateTemplate
+                Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Sid: SamArtifactAndSpaBuckets
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListBucketMultipartUploads
+                  - s3:ListMultipartUploadParts
+                  - s3:GetBucketVersioning
+                  - s3:PutBucketVersioning
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:GetBucketTagging
+                  - s3:PutBucketTagging
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetBucketAcl
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::kintore-memo-*-spa-${AWS::AccountId}"
+                  - !Sub "arn:${AWS::Partition}:s3:::kintore-memo-*-spa-${AWS::AccountId}/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::aws-sam-cli-managed-default-*"
+                  - !Sub "arn:${AWS::Partition}:s3:::aws-sam-cli-managed-default-*/*"
+              - Sid: ListBucketsForSamResolveS3
+                Effect: Allow
+                Action: s3:ListAllMyBuckets
+                Resource: "*"
+              - Sid: LambdaAppFunctions
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                  - lambda:ListTags
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:PublishVersion
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api:*
+              - Sid: PassRoleToLambdaOnly
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: lambda.amazonaws.com
+              - Sid: ManageApiFunctionRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+              - Sid: ApiGatewayServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/ops.apigateway.amazonaws.com/AWSServiceRoleForAPIGateway
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: ops.apigateway.amazonaws.com
+              - Sid: DynamoDbAppTables
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:UpdateTimeToLive
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:UpdateContinuousBackups
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:ListTagsOfResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-dev
+                  - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-staging
+                  - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-prod
+              - Sid: ApiLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:ListTagsForResource
+                  - logs:TagResource
+                  - logs:UntagResource
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api:*
+              - Sid: HttpApi
+                Effect: Allow
+                Action:
+                  - apigateway:GET
+                  - apigateway:POST
+                  - apigateway:PUT
+                  - apigateway:PATCH
+                  - apigateway:DELETE
+                Resource:
+                  - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+                  - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+                  - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/tags/*
+              - Sid: CognitoCreateUserPool
+                Effect: Allow
+                Action: cognito-idp:CreateUserPool
+                Resource: "*"
+              - Sid: CognitoUserPools
+                Effect: Allow
+                Action:
+                  - cognito-idp:DeleteUserPool
+                  - cognito-idp:DescribeUserPool
+                  - cognito-idp:UpdateUserPool
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:DeleteUserPoolClient
+                  - cognito-idp:DescribeUserPoolClient
+                  - cognito-idp:UpdateUserPoolClient
+                  - cognito-idp:GetUserPoolMfaConfig
+                  - cognito-idp:TagResource
+                  - cognito-idp:UntagResource
+                  - cognito-idp:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+              - Sid: CloudFrontCreate
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:CreateOriginAccessControl
+                Resource: "*"
+              - Sid: CloudFrontDistributions
+                Effect: Allow
+                Action:
+                  - cloudfront:GetDistribution
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:TagResource
+                  - cloudfront:UntagResource
+                  - cloudfront:ListTagsForResource
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
+              - Sid: CloudFrontOriginAccessControls
+                Effect: Allow
+                Action:
+                  - cloudfront:GetOriginAccessControl
+                  - cloudfront:UpdateOriginAccessControl
+                  - cloudfront:DeleteOriginAccessControl
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:origin-access-control/*
+              - Sid: DenyNotionParameterAccess
+                Effect: Deny
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:GetParameterHistory
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:parameter/kintore-memo/*/notion/*
+              - Sid: DenyAccessKeys
+                Effect: Deny
+                Action:
+                  - iam:CreateAccessKey
+                  - iam:UpdateAccessKey
+                  - iam:CreateLoginProfile
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: kintore-memo
+        - Key: Purpose
+          Value: github-actions-oidc
+
+Outputs:
+  DeployRoleArn:
+    Description: GitHub Actions variable AWS_DEPLOY_ROLE_ARN. Do not commit the value.
+    Value: !GetAtt GitHubDeployRole.Arn
+  OidcProviderArn:
+    Description: GitHub OIDC provider trusted by the deploy role.
+    Value: !If
+      - ShouldCreateOidcProvider
+      - !Ref GitHubOidcProvider
+      - !Ref ExistingOidcProviderArn

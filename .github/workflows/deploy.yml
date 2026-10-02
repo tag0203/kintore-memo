@@ -1,0 +1,179 @@
+# Manual OIDC deploy. No long-lived AWS access keys.
+# No-op (success) when the repository variable AWS_DEPLOY_ROLE_ARN is unset.
+# Do not add AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY.
+# Do not use `set -x`, `sam deploy --debug`, or `aws --debug` — they can print credentials.
+# This workflow does not read SSM parameters.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: SAM environment
+        type: choice
+        required: true
+        default: dev
+        options:
+          - dev
+          - staging
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: sam deploy and publish SPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SAM_CLI_TELEMETRY: "0"
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_REGION: ap-northeast-1
+      AWS_DEFAULT_REGION: ap-northeast-1
+    steps:
+      - name: Skip until the OIDC role exists
+        id: gate
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AWS_DEPLOY_ROLE_ARN}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "AWS_DEPLOY_ROLE_ARN is unset. Deploy is a no-op until the OIDC role exists."
+            echo "See docs/github-actions-oidc.md."
+            exit 0
+          fi
+          if ! [[ "${AWS_DEPLOY_ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]]; then
+            echo "AWS_DEPLOY_ROLE_ARN is set but is not an IAM role ARN. Not assuming it."
+            exit 1
+          fi
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "This workflow only assumes the deploy role from refs/heads/main."
+            exit 1
+          fi
+          # Mask after the shape check so the ARN is not printed by later steps.
+          echo "::add-mask::${AWS_DEPLOY_ROLE_ARN}"
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+          echo "OIDC deploy role is configured. The role ARN is masked."
+
+      - name: Reject long-lived AWS keys
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "This job started with AWS credential environment variables. OIDC does not use long-lived keys."
+            exit 1
+          fi
+
+      - name: Checkout
+        if: steps.gate.outputs.configured == 'true'
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.configured == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup SAM CLI
+        if: steps.gate.outputs.configured == 'true'
+        uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: Configure AWS credentials
+        if: steps.gate.outputs.configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+          role-session-name: gha-kintore-memo
+          mask-aws-account-id: true
+          output-credentials: false
+          output-env-credentials: true
+
+      - name: Build SPA
+        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          npm run check:secrets
+
+      - name: sam build and deploy
+        if: steps.gate.outputs.configured == 'true'
+        working-directory: infra
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          case "${ENVIRONMENT}" in
+            dev|staging|prod) ;;
+            *)
+              echo "Unsupported environment."
+              exit 1
+              ;;
+          esac
+          sam build --template template.yaml
+          sam deploy \
+            --template-file .aws-sam/build/template.yaml \
+            --region ap-northeast-1 \
+            --stack-name "kintore-memo-${ENVIRONMENT}" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14"
+          echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
+
+      - name: Publish SPA
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          case "${ENVIRONMENT}" in
+            dev|staging|prod) ;;
+            *)
+              echo "Unsupported environment."
+              exit 1
+              ;;
+          esac
+          STACK="kintore-memo-${ENVIRONMENT}"
+          SPA_BUCKET="$(aws cloudformation describe-stacks \
+            --region ap-northeast-1 \
+            --stack-name "${STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" \
+            --output text)"
+          DIST_ID="$(aws cloudformation describe-stacks \
+            --region ap-northeast-1 \
+            --stack-name "${STACK}" \
+            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
+            --output text)"
+          if ! [[ "${SPA_BUCKET}" =~ ^kintore-memo-${ENVIRONMENT}-spa-[0-9]{12}$ ]]; then
+            echo "Refusing to sync: SpaBucketName did not match kintore-memo-${ENVIRONMENT}-spa-<account>."
+            exit 1
+          fi
+          if ! [[ "${DIST_ID}" =~ ^E[A-Z0-9]+$ ]]; then
+            echo "Refusing to invalidate: CloudFront distribution id did not match the expected pattern."
+            exit 1
+          fi
+          aws s3 sync dist/ "s3://${SPA_BUCKET}/" --delete --only-show-errors --region ap-northeast-1
+          INVALIDATION_ID="$(aws cloudfront create-invalidation \
+            --distribution-id "${DIST_ID}" \
+            --paths "/*" \
+            --query "Invalidation.Id" \
+            --output text)"
+          echo "SPA synced. CloudFront invalidation: ${INVALIDATION_ID}"
