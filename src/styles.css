@@ -173,6 +173,13 @@ button, input { appearance: none; }
 .done-banner p { margin: 4px 0 0; color: #3d5674; font-size: 13px; }
 .empty, .status-line, .empty-inline { color: var(--muted); line-height: 1.6; }
 .empty, .status-line { margin-top: 28px; text-align: center; }
+.save-error {
+  margin: 0;
+  padding: calc(12px + env(safe-area-inset-top)) 20px 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .text-error, .form-error { color: var(--danger); font-size: 13px; }
 .form-error { margin: 8px 0 0; }
 .status-line .btn { margin-top: 12px; }

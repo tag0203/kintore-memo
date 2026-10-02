@@ -11,7 +11,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
-| Lambda | Notion ラッパー（#10）。`worker/` はデプロイしない |
+| Lambda | Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
@@ -34,7 +34,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 ```text
 src/                    SPA（既存）
 worker/                 参考実装。本番経路にしない
-backend/                Lambda Notion ラッパー（#10）。worker/ は本番経路ではない
+backend/                Lambda（Notion #10 と DayPlan #6）。worker/ は本番経路ではない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値
@@ -190,7 +190,7 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 ## スコープ外（#8 ではやらない）
 
 - Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
-- DynamoDB のメニュー読み書き（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
-- 画面の API クライアント差し替え（#12。実装は `src/data/httpClient.ts`）
+- 実アカウントでの DayPlan 疎通（実装は `GET` / `PUT /api/day-plan`。設計は [dynamodb.md](./dynamodb.md)）
+- 画面の記録クライアント（#12。実装は `src/data/httpClient.ts`）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
 - GitHub Actions OIDC（#14）

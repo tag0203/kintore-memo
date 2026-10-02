@@ -30,6 +30,17 @@ describe("AppTable", () => {
   });
 });
 
+describe("HttpApi CORS", () => {
+  it("allows PUT so the browser can save a DayPlan", () => {
+    const start = template.indexOf("CorsConfiguration:");
+    const end = template.indexOf("Tags:", start);
+    const cors = template.slice(start, end);
+    expect(cors).toContain("- PUT");
+    expect(cors).toContain("- GET");
+    expect(cors).toContain("- OPTIONS");
+  });
+});
+
 describe("ApiFunction DynamoDB IAM", () => {
   it("allows item reads and writes only on the table ARN", () => {
     const policy = statement("DynamoDBTableAccess");

@@ -1,10 +1,11 @@
 /**
- * Lambda entry for the Notion wrapper (issue #10).
- * NotionCache items are built by dynamodb.mjs (docs/dynamodb.md). DayPlan stays #6.
+ * Lambda entry for the Notion wrapper (#10) and DayPlan (#6).
+ * Item shapes come from dynamodb.mjs (docs/dynamodb.md).
+ * worker/ is the reference implementation and is not invoked here.
  *
  * Public:  GET /api/health
  * Auth:    API Gateway JWT authorizer on /api/{proxy+}. This function does not
- *          check the token again.
+ *          check the token again. DayPlan uses requestContext.authorizer.jwt.claims.sub.
  *
  * GET  /api/exercises
  * GET  /api/exercises/recent
@@ -12,12 +13,16 @@
  * GET  /api/logs/today?exercise=&date=YYYY-MM-DD
  * GET  /api/bootstrap?date=YYYY-MM-DD&exercise=&exercises=
  * POST /api/logs
+ * GET  /api/day-plan?date=YYYY-MM-DD
+ * PUT  /api/day-plan     { date, memo, exercises, finished }
  *
- * worker/ is the reference implementation and is not invoked here.
  * HTTP API payload v2 puts the stage name on rawPath (e.g. /dev/api/health).
  * Prefer routeKey for health, which is stage-independent ("GET /api/health").
  */
 
+import { getDayPlan, jwtSubject, putDayPlan } from "./dayPlan.mjs";
+import { createDefaultDayPlanStore } from "./dayPlanStore.mjs";
+import { ItemValidationError } from "./dynamodb.mjs";
 import { createNotionClient } from "./notionClient.mjs";
 import { createDefaultNotionCache } from "./notionCache.mjs";
 import { createNotionService } from "./notionService.mjs";
@@ -86,6 +91,8 @@ function statusFor(message) {
 /**
  * @param {{
  *   env?: Record<string, string | undefined>,
+ *   now?: () => Date,
+ *   dayPlanStore?: { get: Function, put: Function },
  *   cache?: { get: Function, put: Function, delete: Function, deleteWhere: Function },
  *   loadSecrets?: (env: Record<string, string | undefined>) => Promise<{ token: string, databaseId: string }>,
  *   createClient?: (env: { NOTION_TOKEN: string, NOTION_DATABASE_ID: string }) => object,
@@ -98,11 +105,19 @@ export function createHandler(deps = {}) {
   let cachePromise = null;
   /** @type {Map<string, ReturnType<typeof createNotionService>>} */
   const services = new Map();
+  /** @type {Promise<{ get: Function, put: Function }> | null} */
+  let storePromise = null;
 
   function cache() {
     if (deps.cache) return Promise.resolve(deps.cache);
     cachePromise ??= createDefaultNotionCache(envOf());
     return cachePromise;
+  }
+
+  function dayPlanStore() {
+    if (deps.dayPlanStore) return Promise.resolve(deps.dayPlanStore);
+    storePromise ??= createDefaultDayPlanStore(envOf());
+    return storePromise;
   }
 
   async function service() {
@@ -119,12 +134,55 @@ export function createHandler(deps = {}) {
     return created;
   }
 
+  /**
+   * @param {Record<string, unknown>} event
+   * @param {string} method
+   */
+  async function handleDayPlan(event, method) {
+    if (method !== "GET" && method !== "PUT") {
+      return json(405, { error: "method_not_allowed", message: "GET または PUT を使ってください" }, { allow: "GET, PUT" });
+    }
+    const tableReady = Boolean(deps.dayPlanStore) || Boolean(envOf().TABLE_NAME);
+    if (!tableReady) {
+      return json(503, { error: "table_unconfigured", message: "TABLE_NAME がありません" });
+    }
+    const userId = jwtSubject(event);
+    if (!userId) {
+      return json(401, { error: "unauthorized", message: "ログインが必要です" });
+    }
+    try {
+      const store = await dayPlanStore();
+      const now = deps.now ? deps.now() : new Date();
+      const result =
+        method === "GET"
+          ? await getDayPlan({ userId, date: searchParams(event).get("date"), store, now })
+          : await putDayPlan({ userId, body: readEventJson(event), store, now });
+      return json(200, result);
+    } catch (error) {
+      if (error instanceof ItemValidationError) {
+        if (error.code === "user_id") {
+          return json(401, { error: "unauthorized", message: "ログインが必要です" });
+        }
+        return json(400, { error: error.code, message: error.message });
+      }
+      if (error instanceof SyntaxError) {
+        return json(400, { error: "invalid_json", message: "JSON を確認してください" });
+      }
+      console.error("day plan failed", error instanceof Error ? error.name : "unknown");
+      return json(502, { error: "storage", message: "DayPlan の読み書きに失敗しました" });
+    }
+  }
+
   return async function handler(event) {
     const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
     const path = resolvePath(event);
 
     if (method === "OPTIONS") {
       return { statusCode: 204, headers: {}, body: "" };
+    }
+
+    if (path === "/api/day-plan") {
+      return handleDayPlan(event, method);
     }
 
     try {
