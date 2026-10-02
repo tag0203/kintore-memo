@@ -49,7 +49,7 @@ npm run dev
          └─ Notion API 2026-03-11
 ```
 
-画面は `src/data/client.ts` の `WorkoutLogClient` だけを見ます。Notion の URL やトークンを読むコードは `worker/` にしかありません。Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` のキーに `VITE_` は付けていません。
+画面は `src/data/client.ts` の `WorkoutLogClient` だけを見ます。Notion の URL やトークンを読むコードは `worker/` にしかありません。Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` の `VITE_` は Cognito / API の公開設定だけです（秘密ではない）。Notion のキーには `VITE_` を付けません。
 
 | 状態 | どこに置くか |
 | --- | --- |
@@ -102,4 +102,6 @@ sam build
 sam deploy
 ```
 
-後続は Cognito ログイン（[#9](https://github.com/tag0203/kintore-memo/issues/9)）、Lambda の Notion API（[#10](https://github.com/tag0203/kintore-memo/issues/10)）、DynamoDB 設計（[#11](https://github.com/tag0203/kintore-memo/issues/11)）です。
+Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
+
+後続は Lambda の Notion API（[#10](https://github.com/tag0203/kintore-memo/issues/10)）、DynamoDB 設計（[#11](https://github.com/tag0203/kintore-memo/issues/11)）、画面の API 差し替え（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
