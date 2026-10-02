@@ -87,6 +87,21 @@ describe("secret check", () => {
     }
   });
 
+  it("rejects a backend import of the worker reference", () => {
+    const root = writeTree({
+      "backend/index.mjs": "import { handleRequest } from \"../worker/index.ts\";\n",
+      "src/app.ts": "export const label = 'スクワット';\n",
+    });
+    try {
+      const failures = findLeaks(root, {
+        tracked: new Set(["backend/index.mjs", "src/app.ts"]),
+      });
+      expect(failures.some((line) => line.includes("backend/index.mjs"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("checks an isolated git repo and keeps that repo's .env", () => {
     withWorkspaceEnvPreserved(() => {
       const root = mkdtempSync(join(tmpdir(), "kintore-secrets-repo-"));

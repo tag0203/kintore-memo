@@ -86,7 +86,7 @@ npm run dev
 
 ## curl で JWT 付き API を試す
 
-`/api/health` は Authorizer なし。保護ルート（例: 未実装の `/api/exercises`）は JWT が無いと 401 です。
+`/api/health` は Authorizer なし。保護ルート（例: `/api/exercises`）は JWT が無いと 401 です。Lambda はトークンを再検証しません。
 
 ```bash
 CLIENT_ID=$(aws cloudformation describe-stacks --stack-name kintore-memo-dev \
@@ -108,10 +108,10 @@ curl -sS -o /dev/null -w "%{http_code}\n" "${API_URL}/api/exercises"
 curl -sS -o /dev/null -w "%{http_code}\n" \
   -H "Authorization: Bearer ${ID_TOKEN}" \
   "${API_URL}/api/exercises"
-# 501（骨格 Lambda。実装は #10）— 401 ではないことがポイント
+# 200（Notion が読める）/ 500（SSM 未設定）/ 502（Notion が拒否）。401 ではないことがポイント
 ```
 
-未認証が 401、認証後が 501（または #10 以降の 200）なら、JWT Authorizer は期待どおりです。
+未認証が 401、認証後が 200 か 500 か 502 なら、JWT Authorizer は期待どおりです。Lambda に別の認証処理はありません。
 
 ## ローカル SPA × デプロイ済み API
 

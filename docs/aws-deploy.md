@@ -10,8 +10,8 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | --- | --- |
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
-| API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開 |
-| Lambda | `/api/health` が応答。他の `/api/*` は 501（実装は #10） |
+| API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
+| Lambda | Notion ラッパー（#10）。`worker/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
@@ -34,7 +34,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 ```text
 src/                    SPA（既存）
 worker/                 参考実装。本番経路にしない
-backend/                Lambda（骨格。Notion は #10）
+backend/                Lambda Notion ラッパー（#10）。worker/ は本番経路ではない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値
@@ -93,7 +93,7 @@ aws ssm put-parameter \
   --value 'YOUR_NOTION_DATABASE_ID'
 ```
 
-既にある場合は `--overwrite` を付けます。骨格の Lambda はまだ SSM を読みません。#10 で読みます。
+既にある場合は `--overwrite` を付けます。Lambda はリクエストのたびにここを読み、同じ実行環境では数分間メモリに残します。値はレスポンスとログに出しません。
 
 ### SPA をバケットへ載せる（任意）
 
@@ -124,10 +124,10 @@ API_URL=$(aws cloudformation describe-stacks \
   --output text)
 
 curl -sS "${API_URL}/api/health"
-# {"ok":true,"service":"kintore-memo","stage":"skeleton",...}
+# {"ok":true,"service":"kintore-memo","stage":"dev","notionConfigured":true,"tableName":"kintore-memo-dev"}
 ```
 
-`/api/health` 以外は JWT が無いと 401 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成と自前ログインフォームの手順は [aws-auth.md](./aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。
+`notionConfigured` は秘密の中身ではなく、トークンの置き場（環境変数か SSM 名）があることだけを示します。`/api/health` 以外は JWT が無いと 401 です。認証後の Notion ルートは、SSM に値があれば 200、設定が無ければ 500、Notion が拒否すれば 502 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成と自前ログインフォームの手順は [aws-auth.md](./aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。
 
 ## ローカル（sam local）
 
@@ -158,13 +158,16 @@ sam local start-api --port 3000 \
 {
   "ApiFunction": {
     "TABLE_NAME": "kintore-memo-local",
-    "NOTION_TOKEN_PARAM": "/kintore-memo/dev/notion/token",
-    "NOTION_DATABASE_ID_PARAM": "/kintore-memo/dev/notion/database-id",
+    "NOTION_TOKEN": "YOUR_NOTION_TOKEN",
+    "NOTION_DATABASE_ID": "YOUR_NOTION_DATABASE_ID",
+    "NOTION_CACHE": "memory",
     "ALLOWED_ORIGIN": "http://localhost:5173",
     "ENVIRONMENT": "local"
   }
 }
 ```
+
+`NOTION_TOKEN` と `NOTION_DATABASE_ID` が両方あるときは SSM を呼びません。`sam local` には Cognito も DynamoDB も無いので、`NOTION_CACHE=memory` にします。このファイルは gitignore 済みです。値をリポジトリに書かないでください。SSM 名だけを渡しても、ローカルではパラメータを読めません。
 
 SPA のローカルは従来どおりです。
 
@@ -187,8 +190,7 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 ## スコープ外（#8 ではやらない）
 
 - Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
-- Notion ラッパー API の実装（#10）
-- DynamoDB の読み書き API（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
+- DynamoDB のメニュー読み書き（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
 - 画面の API クライアント差し替え（#12）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
 - GitHub Actions OIDC（#14）

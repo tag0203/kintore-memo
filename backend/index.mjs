@@ -1,14 +1,34 @@
 /**
- * Minimal Lambda handler for the AWS skeleton (#8).
- * Real Notion / DynamoDB routes land in #10 and #6.
- * Table items are built by dynamodb.mjs (docs/dynamodb.md). This handler does not read the table.
+ * Lambda entry for the Notion wrapper (issue #10).
+ * NotionCache items are built by dynamodb.mjs (docs/dynamodb.md). DayPlan stays #6.
  *
  * Public:  GET /api/health
- * Auth:    other /api/* (JWT via API Gateway; stub returns 501)
+ * Auth:    API Gateway JWT authorizer on /api/{proxy+}. This function does not
+ *          check the token again.
  *
+ * GET  /api/exercises
+ * GET  /api/exercises/recent
+ * GET  /api/logs/previous?exercise=&before=YYYY-MM-DD
+ * GET  /api/logs/today?exercise=&date=YYYY-MM-DD
+ * GET  /api/bootstrap?date=YYYY-MM-DD&exercise=&exercises=
+ * POST /api/logs
+ *
+ * worker/ is the reference implementation and is not invoked here.
  * HTTP API payload v2 puts the stage name on rawPath (e.g. /dev/api/health).
- * Prefer routeKey, which is stage-independent ("GET /api/health").
+ * Prefer routeKey for health, which is stage-independent ("GET /api/health").
  */
+
+import { createNotionClient } from "./notionClient.mjs";
+import { createDefaultNotionCache } from "./notionCache.mjs";
+import { createNotionService } from "./notionService.mjs";
+import { createDefaultSecretLoader, notionConfigured } from "./secrets.mjs";
+import {
+  RequestValidationError,
+  assertExerciseName,
+  assertISODate,
+  parseExerciseList,
+  readCreateBody,
+} from "./validate.mjs";
 
 const json = (statusCode, body, headers = {}) => ({
   statusCode,
@@ -35,24 +55,126 @@ export function isHealthGet(event) {
   return method === "GET" && resolvePath(event) === "/api/health";
 }
 
-export const handler = async (event) => {
-  const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
-  const path = resolvePath(event);
+function searchParams(event) {
+  if (typeof event.rawQueryString === "string") return new URLSearchParams(event.rawQueryString);
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(event.queryStringParameters ?? {})) {
+    if (typeof value === "string") params.append(key, value);
+  }
+  return params;
+}
 
-  if (isHealthGet(event)) {
-    return json(200, {
-      ok: true,
-      service: "kintore-memo",
-      stage: "skeleton",
-      notionConfigured: false,
-      tableName: process.env.TABLE_NAME ?? null,
-    });
+function readEventJson(event) {
+  if (event.body == null || event.body === "") return {};
+  const text = event.isBase64Encoded ? Buffer.from(event.body, "base64").toString("utf8") : event.body;
+  return JSON.parse(text);
+}
+
+function publicMessage(error) {
+  const message = error instanceof Error ? error.message : "処理に失敗しました";
+  return message
+    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
+    .replace(/ntn_[A-Za-z0-9]+/g, "[redacted]")
+    .replace(/secret_[A-Za-z0-9]+/g, "[redacted]");
+}
+
+function statusFor(message) {
+  if (message.includes("設定されていません") || message.includes("設定がありません")) return 500;
+  return 502;
+}
+
+/**
+ * @param {{
+ *   env?: Record<string, string | undefined>,
+ *   cache?: { get: Function, put: Function, delete: Function, deleteWhere: Function },
+ *   loadSecrets?: (env: Record<string, string | undefined>) => Promise<{ token: string, databaseId: string }>,
+ *   createClient?: (env: { NOTION_TOKEN: string, NOTION_DATABASE_ID: string }) => object,
+ * }} [deps]
+ */
+export function createHandler(deps = {}) {
+  const envOf = () => deps.env ?? process.env;
+  const loadSecrets = deps.loadSecrets ?? createDefaultSecretLoader();
+  /** @type {Promise<{ get: Function, put: Function, delete: Function, deleteWhere: Function }> | null} */
+  let cachePromise = null;
+  /** @type {Map<string, ReturnType<typeof createNotionService>>} */
+  const services = new Map();
+
+  function cache() {
+    if (deps.cache) return Promise.resolve(deps.cache);
+    cachePromise ??= createDefaultNotionCache(envOf());
+    return cachePromise;
   }
 
-  return json(501, {
-    error: "not_implemented",
-    message: "API routes beyond /api/health are added in later issues (#9, #10).",
-    path,
-    method,
-  });
-};
+  async function service() {
+    const secrets = await loadSecrets(envOf());
+    const key = `${secrets.databaseId}\0${secrets.token}`;
+    const existing = services.get(key);
+    if (existing) return existing;
+    const client = (deps.createClient ?? createNotionClient)({
+      NOTION_TOKEN: secrets.token,
+      NOTION_DATABASE_ID: secrets.databaseId,
+    });
+    const created = createNotionService({ client, cache: await cache() });
+    services.set(key, created);
+    return created;
+  }
+
+  return async function handler(event) {
+    const method = event.requestContext?.http?.method ?? event.httpMethod ?? "GET";
+    const path = resolvePath(event);
+
+    if (method === "OPTIONS") {
+      return { statusCode: 204, headers: {}, body: "" };
+    }
+
+    try {
+      if (isHealthGet(event)) {
+        const env = envOf();
+        return json(200, {
+          ok: true,
+          service: "kintore-memo",
+          stage: env.ENVIRONMENT || "local",
+          notionConfigured: notionConfigured(env),
+          tableName: env.TABLE_NAME ?? null,
+        });
+      }
+
+      const params = searchParams(event);
+      /** @type {null | (() => Promise<unknown>)} */
+      let run = null;
+
+      if (method === "GET" && path === "/api/exercises") {
+        run = async () => (await service()).listExercises();
+      } else if (method === "GET" && path === "/api/exercises/recent") {
+        run = async () => (await service()).listRecentExercises();
+      } else if (method === "GET" && path === "/api/logs/previous") {
+        const exercise = assertExerciseName(params.get("exercise") ?? "");
+        const before = assertISODate(params.get("before") ?? "", "before");
+        run = async () => (await service()).getPreviousLog(exercise, before);
+      } else if (method === "GET" && path === "/api/logs/today") {
+        const exercise = assertExerciseName(params.get("exercise") ?? "");
+        const date = assertISODate(params.get("date") ?? "", "date");
+        run = async () => (await service()).getLogOnDate(exercise, date);
+      } else if (method === "GET" && path === "/api/bootstrap") {
+        const date = assertISODate(params.get("date") ?? "", "date");
+        const exercises = parseExerciseList([...params.getAll("exercise"), ...params.getAll("exercises")]);
+        run = async () => (await service()).bootstrap(date, exercises);
+      } else if (method === "POST" && path === "/api/logs") {
+        const input = readCreateBody(readEventJson(event));
+        run = async () => (await service()).createLog(input);
+      }
+
+      if (!run) return json(404, { error: "見つかりません" });
+      const body = await run();
+      const statusCode = method === "POST" ? 201 : 200;
+      return json(statusCode, body);
+    } catch (error) {
+      if (error instanceof RequestValidationError) return json(error.statusCode, { error: error.message });
+      if (error instanceof SyntaxError) return json(400, { error: "JSON を確認してください" });
+      const message = publicMessage(error);
+      return json(statusFor(message), { error: message });
+    }
+  };
+}
+
+export const handler = createHandler();

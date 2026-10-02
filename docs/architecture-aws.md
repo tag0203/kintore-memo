@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md) です。Notion API・画面差し替えは後続 Issue です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。Notion ラッパーは `backend/`（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12) です。
 
 ## 目的
 
@@ -102,7 +102,7 @@ SPA はリポジトリ直下のままです。`frontend/` への移動は必須�
 src/                    既存の SPA（auth/ に Cognito 自前フォーム #9）
 public/
 worker/                 参考実装。本番経路にしない
-backend/                Lambda（骨格。テーブル契約は dynamodb.mjs。Notion は #10）
+backend/                Lambda Notion ラッパー（#10）。項目は dynamodb.mjs。worker/ は import しない
 infra/template.yaml     SAM（#8）
 infra/samconfig.toml
 docs/architecture-aws.md
@@ -164,7 +164,16 @@ User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/
 - 成功した書き込みのあと、クライアントのキャッシュを更新する。
 - DynamoDB に短い TTL の応答キャッシュを置いてもよい。画面遷移の代替にはしない。
 
-API の形は参考実装に揃えてよいです。
+Lambda（`backend/`）はこれを次の形で行う。画面の差し替え（[#12](https://github.com/tag0203/kintore-memo/issues/12)）の前でも、API 単体では同じ契約です。
+
+- `GET /api/bootstrap?date=YYYY-MM-DD` が種目一覧、最近、指定種目（`exercise` の繰り返し、または `exercises=a,b`）の前回と当日を返す。`date` は画面のセッション日付で、サーバーの UTC 今日では上書きしない。
+- 種目一覧と「最近 100 件」のウィンドウを 300 秒共有する。2 回目の bootstrap は、ウィンドウで足りる限り Notion を呼ばない。
+- ウィンドウが履歴の途中で切れていて、前回が証明できない種目だけ 1 件問い合わせる。
+- `POST /api/logs` の成功後に、種目一覧・最近ウィンドウ・その種目のキャッシュを捨てる。次の読みだけ Notion に戻る。
+- キャッシュ項目は [dynamodb.md](./dynamodb.md) の `NotionCache` で、`backend/dynamodb.mjs` が組み立てる（`pk=CACHE#notion`、`sk` は 1〜4 セグメント、TTL 300 秒）。DynamoDB の失敗時、または `NOTION_CACHE=memory` のときはプロセス内メモリだけ。失敗しても読み取りは Notion に進む。
+- トークンは `NOTION_TOKEN` / `NOTION_DATABASE_ID` が両方あるときそれを使い、無ければ SSM を `WithDecryption` で読む。同じ実行環境では数分間再利用する。レスポンスには出さない。
+
+API の形は参考実装に揃えています。`worker/` は本番では呼びません。
 
 - `GET /api/health`
 - `GET /api/exercises`
@@ -174,7 +183,7 @@ API の形は参考実装に揃えてよいです。
 - `POST /api/logs`
 - bootstrap の一括取得（推奨）
 
-移植は [#10](https://github.com/tag0203/kintore-memo/issues/10)、画面の差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12) です。
+Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面の差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12) です。
 
 ## コスト
 
@@ -226,7 +235,7 @@ API の形は参考実装に揃えてよいです。
 | [#7](https://github.com/tag0203/kintore-memo/issues/7) | この構成方針 |
 | [#8](https://github.com/tag0203/kintore-memo/issues/8) | SAM / CDK で最小の IaC |
 | [#9](https://github.com/tag0203/kintore-memo/issues/9) | Cognito と JWT Authorizer |
-| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API |
+| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（`backend/`。画面の接続は #12） |
 | [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計。[dynamodb.md](./dynamodb.md) |
 | [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える |
 | [#13](https://github.com/tag0203/kintore-memo/issues/13) | Cloudflare DNS、ACM、本番デプロイ |

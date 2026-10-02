@@ -75,7 +75,10 @@ export function findLeaks(root, options = {}) {
     } catch {
       return;
     }
-    if (pathRel.startsWith("src/") && /from\s+["'][^"']*worker\//.test(text)) {
+    if (
+      (pathRel.startsWith("src/") || pathRel.startsWith("backend/")) &&
+      /from\s+["'][^"']*worker\//.test(text)
+    ) {
       failures.push(`${pathRel} が Worker を import しています`);
     }
     if (isAllowed(pathRel)) return;

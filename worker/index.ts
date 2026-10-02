@@ -1,3 +1,7 @@
+/**
+ * Cloudflare Worker reference for the Notion HTTP shape.
+ * Not the production path. Deployed traffic goes to API Gateway and backend/index.mjs.
+ */
 import { isDifficulty, isISODate, isValidCount, isValidWeightKg, type NewExerciseLog } from "../src/domain";
 import type { WorkoutLogClient } from "../src/data/client";
 import type { NotionEnv } from "./env";
