@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Lambda handlers for kintore-memo. DayPlan / NotionCache items: dynamodb.mjs. Notion wiring is #10.",
-  "main": "index.mjs"
+  "description": "Lambda Notion wrapper (#10). Cache and DayPlan items: dynamodb.mjs. worker/ is not the production path.",
+  "main": "index.mjs",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.901.0",
+    "@aws-sdk/client-ssm": "^3.901.0",
+    "@aws-sdk/util-dynamodb": "^3.901.0"
+  }
 }

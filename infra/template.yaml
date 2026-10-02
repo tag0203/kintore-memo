@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  kintore-memo — minimal AWS skeleton (issue #8).
-  S3+CloudFront+OAC, HTTP API+Lambda, Cognito JWT Authorizer,
+  kintore-memo — S3+CloudFront+OAC, HTTP API+Lambda, Cognito JWT Authorizer,
   DynamoDB On-Demand, SSM SecureString, CloudWatch Logs with retention.
-  Notion API wiring is out of scope (#10). Custom domain / ACM is #13.
+  Lambda is the Notion wrapper (#10). worker/ is not deployed.
+  Custom domain / ACM is #13. Screen client swap is #12.
 
 Parameters:
   ProjectName:
@@ -210,7 +210,8 @@ Resources:
       CodeUri: ../backend/
       Handler: index.handler
       Role: !GetAtt ApiFunctionRole.Arn
-      Description: kintore-memo API skeleton (health only; Notion in #10)
+      Timeout: 20
+      Description: Notion wrapper API (#10). JWT auth stays on the HTTP API authorizer.
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable

@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-// ブラウザへ渡す環境変数は VITE_ だけ。Notion のトークンは Worker のシークレットであり、ここへ載せない。
+// ブラウザへ渡す環境変数は VITE_ だけ。Notion のトークンは Lambda が SSM から読む。
 export default defineConfig({
   envPrefix: "VITE_",
   plugins: [
