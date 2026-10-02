@@ -1,6 +1,7 @@
 /**
  * Minimal Lambda handler for the AWS skeleton (#8).
  * Real Notion / DynamoDB routes land in #10 and #6.
+ * Table items are built by dynamodb.mjs (docs/dynamodb.md). This handler does not read the table.
  *
  * Public:  GET /api/health
  * Auth:    other /api/* (JWT via API Gateway; stub returns 501)
