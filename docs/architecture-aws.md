@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md) です。Notion API・認証 UI・画面差し替えは後続 Issue です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md) です。Notion API・画面差し替えは後続 Issue です。
 
 ## 目的
 
@@ -99,7 +99,7 @@ IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK には�
 SPA はリポジトリ直下のままです。`frontend/` への移動は必須ではありません。
 
 ```text
-src/                    既存の SPA
+src/                    既存の SPA（auth/ に Cognito 自前フォーム #9）
 public/
 worker/                 参考実装。本番経路にしない
 backend/                Lambda（骨格。テーブル契約は dynamodb.mjs。Notion は #10）
@@ -107,6 +107,7 @@ infra/template.yaml     SAM（#8）
 infra/samconfig.toml
 docs/architecture-aws.md
 docs/aws-deploy.md
+docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
 .github/workflows/      OIDC デプロイ（#14）
 ```
@@ -145,13 +146,13 @@ Lambda の IAM は、そのパラメータの `GetParameter` と、そのテー�
 個人利用ですが、学習サンプルとしてログインを付けます。
 
 1. Cognito User Pool は自己登録を禁止する（`AllowAdminCreateUserOnly`）。利用するユーザーは管理者が作成する。
-2. SPA が Cognito User Pool でメールとパスワードのログインをする。Hosted UI でも自前フォームでもよい。単純な方を採る。ソーシャルログインは後回し。
-3. 取れた JWT を `Authorization: Bearer` で API Gateway に付ける。
-4. HTTP API の JWT Authorizer が発行者と audience を検証する。
+2. SPA が Cognito User Pool でメールとパスワードのログインをする。**自前フォーム**（Hosted UI は使わない）。ソーシャルログインは後回し。
+3. 取れた **IdToken** を `Authorization: Bearer` で API Gateway に付ける。
+4. HTTP API の JWT Authorizer が発行者と audience（App Client）を検証する。
 5. 通ったリクエストだけが Lambda に届く。
 6. 未認証は API Gateway が拒否する。
 
-手順の詳細は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
+User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/issues/8)。ログイン UI・ユーザー作成手順・トークン付与は [#9](https://github.com/tag0203/kintore-memo/issues/9)（[aws-auth.md](./aws-auth.md)）。画面の本番 API 差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12)。
 
 ## レート制限とキャッシュ
 

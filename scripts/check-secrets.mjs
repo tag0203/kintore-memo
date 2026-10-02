@@ -94,6 +94,16 @@ export function findLeaks(root, options = {}) {
   return failures;
 }
 
+const allowedExampleKeys = new Set([
+  "NOTION_TOKEN",
+  "NOTION_DATABASE_ID",
+  // Cognito / API の公開設定（秘密ではない）。値は空のまま。
+  "VITE_COGNITO_REGION",
+  "VITE_COGNITO_USER_POOL_ID",
+  "VITE_COGNITO_CLIENT_ID",
+  "VITE_API_BASE_URL",
+]);
+
 function checkExample(root, failures) {
   const examplePath = join(root, ".env.example");
   if (!existsSync(examplePath)) return;
@@ -109,7 +119,9 @@ function checkExample(root, failures) {
     }
     keys.push(match[1]);
     if (match[2].trim() !== "") failures.push(`${match[1]} は空にしてください`);
-    if (!match[1].startsWith("NOTION_")) failures.push(`${match[1]} は NOTION_ 以外です`);
+    if (!allowedExampleKeys.has(match[1])) {
+      failures.push(`${match[1]} は .env.example で許可されていません`);
+    }
   }
   for (const key of ["NOTION_TOKEN", "NOTION_DATABASE_ID"]) {
     if (!keys.includes(key)) failures.push(`.env.example に ${key} がありません`);

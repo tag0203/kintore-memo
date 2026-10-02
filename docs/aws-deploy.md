@@ -12,7 +12,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開 |
 | Lambda | `/api/health` が応答。他の `/api/*` は 501（実装は #10） |
-| Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。ユーザー作成とログイン UI は #9 |
+| Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
 | CloudWatch Logs | Lambda ログ。保持 7 または 14 日（既定 14） |
@@ -40,6 +40,7 @@ infra/
   samconfig.toml        sam deploy の既定値
 docs/
   architecture-aws.md
+  aws-auth.md           Cognito ログイン（#9）
   aws-deploy.md         このファイル
   dynamodb.md           単一テーブル（#11）
 ```
@@ -126,7 +127,7 @@ curl -sS "${API_URL}/api/health"
 # {"ok":true,"service":"kintore-memo","stage":"skeleton",...}
 ```
 
-`/api/health` 以外は JWT が無いと 401 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成とログイン手順は [#9](https://github.com/tag0203/kintore-memo/issues/9) です。
+`/api/health` 以外は JWT が無いと 401 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成と自前ログインフォームの手順は [aws-auth.md](./aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。
 
 ## ローカル（sam local）
 
@@ -183,9 +184,9 @@ sam delete --stack-name kintore-memo-dev
 
 S3 にオブジェクトが残っているとバケット削除に失敗することがあります。先に空にしてください。
 
-## スコープ外（この Issue ではやらない）
+## スコープ外（#8 ではやらない）
 
-- Cognito ログイン UI とトークン付与（#9）
+- Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
 - Notion ラッパー API の実装（#10）
 - DynamoDB の読み書き API（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
 - 画面の API クライアント差し替え（#12）

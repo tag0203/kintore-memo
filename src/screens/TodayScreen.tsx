@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
 import { useClient } from "../clientContext";
 import { formatJapaneseDate, formatSetSummary, type ExerciseLog } from "../domain";
@@ -15,6 +16,7 @@ interface PlanRow {
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
   const session = useSession();
   const client = useClient();
+  const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
   const planKey = session.exercises.join("\n");
   const loaded = useLoad(async () => {
@@ -34,8 +36,17 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
 
   return (
     <section className="screen">
-      <h1 className="today-title">今日のトレーニング</h1>
-      <p className="today-date">{formatJapaneseDate(session.date)}</p>
+      <div className="today-head">
+        <div>
+          <h1 className="today-title">今日のトレーニング</h1>
+          <p className="today-date">{formatJapaneseDate(session.date)}</p>
+        </div>
+        {auth.required && auth.email && (
+          <button type="button" className="text-btn" onClick={auth.signOut}>
+            ログアウト
+          </button>
+        )}
+      </div>
 
       {session.finished && (
         <div className="done-banner" role="status">
