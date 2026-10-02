@@ -2,7 +2,7 @@
 
 Issue [#8](https://github.com/tag0203/kintore-memo/issues/8) の最小 IaC 骨格です。方針は [architecture-aws.md](./architecture-aws.md) が正です。
 
-IaC は **AWS SAM** です（CDK にはしていません）。テンプレートは `infra/template.yaml`、Lambda の骨格は `backend/` です。SPA はリポジトリ直下のままです。
+IaC は **AWS SAM** です（CDK にはしていません）。テンプレートは `infra/template.yaml`、本番 Lambda は Go の `api/` です。Node の `backend/` は非推奨で、このテンプレートはデプロイしません。SPA はリポジトリ直下のままです。
 
 ## この骨格が立てるもの
 
@@ -11,7 +11,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
-| Lambda | Notion ラッパー（#10）。`worker/` はデプロイしない |
+| Lambda | Go（`provided.al2023`、#23）。`worker/` と Node `backend/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
@@ -25,7 +25,8 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 - AWS CLI v2（デプロイするアカウントにサインイン済み）
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Docker（`sam local` 用）
-- Node.js 22（ローカルの SPA と Lambda ランタイムに合わせる）
+- Go 1.22（`sam build` が `api/` を `bootstrap` にコンパイルする。Lambda は `provided.al2023` / arm64）
+- Node.js 22（ローカルの SPA。Lambda ランタイムではない）
 
 リージョンの既定は `ap-northeast-1` です（`infra/samconfig.toml`）。
 
@@ -33,8 +34,9 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 
 ```text
 src/                    SPA（既存）
+api/                    本番 Lambda（Go）。worker/ も Node backend/ も本番経路ではない
 worker/                 参考実装。本番経路にしない
-backend/                Lambda Notion ラッパー（#10）。worker/ は本番経路ではない
+backend/                非推奨の Node Lambda。契約テスト用。SAM はデプロイしない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値
@@ -54,7 +56,7 @@ docs/
 cd infra
 sam validate --lint
 
-# 2. ビルド（backend/ を成果物にまとめる）
+# 2. ビルド（api/ の Go を bootstrap にまとめる）
 sam build
 
 # 3. 初回 / 更新デプロイ（変更セット確認あり）
@@ -190,7 +192,7 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 ## スコープ外（#8 ではやらない）
 
 - Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
-- DynamoDB のメニュー読み書き（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
+- 画面からの DayPlan 復元（API は `GET` / `PUT /api/day-plan`。設計は [dynamodb.md](./dynamodb.md)、画面は #6）
 - 画面の API クライアント差し替え（#12。実装は `src/data/httpClient.ts`）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
 - GitHub Actions OIDC（#14）

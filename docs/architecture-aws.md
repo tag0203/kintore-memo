@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。Notion ラッパーは `backend/`（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面クライアントは `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。本番の Notion ラッパーは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です（[#10](https://github.com/tag0203/kintore-memo/issues/10) の実装）。画面クライアントは `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
 
 ## 目的
 
@@ -101,15 +101,16 @@ SPA はリポジトリ直下のままです。`frontend/` への移動は必須�
 ```text
 src/                    既存の SPA（auth/ に Cognito 自前フォーム #9）
 public/
+api/                    本番 Lambda（Go、provided.al2023、#23）
 worker/                 参考実装。本番経路にしない
-backend/                Lambda Notion ラッパー（#10）。項目は dynamodb.mjs。worker/ は import しない
-infra/template.yaml     SAM（#8）
+backend/                非推奨の Node Lambda。SAM はデプロイしない
+infra/template.yaml     SAM（#8）。API は Go
 infra/samconfig.toml
 docs/architecture-aws.md
 docs/aws-deploy.md
 docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
-.github/workflows/      OIDC デプロイ（#14）
+.github/workflows/      テスト。OIDC デプロイは #14
 ```
 
 ## Notion と DynamoDB
@@ -120,7 +121,7 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 | --- | --- | --- |
 | 種目、重量、回数、セット数、きつさ、日付、タイトル | Notion | 保存のたびに 1 行追加する。上書きしない |
 | 前回 | Notion から導出 | その種目で、今日より前の最新 1 行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | [#6](https://github.com/tag0203/kintore-memo/issues/6)。キーと TTL は [dynamodb.md](./dynamodb.md)。いまはブラウザのメモリ |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | Go の `GET` / `PUT /api/day-plan`。キーと TTL は [dynamodb.md](./dynamodb.md)。画面の接続は [#6](https://github.com/tag0203/kintore-memo/issues/6)。いま画面はブラウザのメモリ |
 | Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |
 
 初期スコープに入れないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態。
@@ -164,13 +165,13 @@ User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/
 - 成功した書き込みのあと、クライアントのキャッシュを更新する。
 - DynamoDB に短い TTL の応答キャッシュを置いてもよい。画面遷移の代替にはしない。
 
-Lambda（`backend/`）はこれを次の形で行う。画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）は遷移のたびに API を呼ばず、起動時の bootstrap と保存だけです。API 単体も同じ契約です。
+Go Lambda（`api/`）はこれを次の形で行う。画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）は遷移のたびに API を呼ばず、起動時の bootstrap と保存だけです。API 単体も同じ契約です。
 
 - `GET /api/bootstrap?date=YYYY-MM-DD` が種目一覧、最近、指定種目（`exercise` の繰り返し、または `exercises=a,b`）の前回と当日を返す。`date` は画面のセッション日付で、サーバーの UTC 今日では上書きしない。
 - 種目一覧と「最近 100 件」のウィンドウを 300 秒共有する。2 回目の bootstrap は、ウィンドウで足りる限り Notion を呼ばない。
 - ウィンドウが履歴の途中で切れていて、前回が証明できない種目だけ 1 件問い合わせる。
 - `POST /api/logs` の成功後に、種目一覧・最近ウィンドウ・その種目のキャッシュを捨てる。次の読みだけ Notion に戻る。
-- キャッシュ項目は [dynamodb.md](./dynamodb.md) の `NotionCache` で、`backend/dynamodb.mjs` が組み立てる（`pk=CACHE#notion`、`sk` は 1〜4 セグメント、TTL 300 秒）。DynamoDB の失敗時、または `NOTION_CACHE=memory` のときはプロセス内メモリだけ。失敗しても読み取りは Notion に進む。
+- キャッシュ項目は [dynamodb.md](./dynamodb.md) の `NotionCache` で、`api/internal/ddb` が組み立てる（`pk=CACHE#notion`、`sk` は 1〜4 セグメント、TTL 300 秒）。DynamoDB の失敗時、または `NOTION_CACHE=memory` のときはプロセス内メモリだけ。失敗しても読み取りは Notion に進む。
 - トークンは `NOTION_TOKEN` / `NOTION_DATABASE_ID` が両方あるときそれを使い、無ければ SSM を `WithDecryption` で読む。同じ実行環境では数分間再利用する。レスポンスには出さない。
 
 API の形は参考実装に揃えています。`worker/` は本番では呼びません。
@@ -182,8 +183,9 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - `GET /api/logs/today?exercise=&date=YYYY-MM-DD`
 - `POST /api/logs`
 - bootstrap の一括取得（推奨）
+- `GET /api/day-plan?date=YYYY-MM-DD` と `PUT /api/day-plan`（本文は `date` / `memo` / `exercises` / `finished`。ユーザー ID は JWT の `sub`）
 
-Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+本番 Lambda は [#23](https://github.com/tag0203/kintore-memo/issues/23) の `api/` です。[#10](https://github.com/tag0203/kintore-memo/issues/10) の Node `backend/` は非推奨で、SAM はデプロイしません。画面は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
 
 ## コスト
 
@@ -214,7 +216,7 @@ Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `back
 - 上の「使わないもの」に挙げた固定費サービス
 - `src/` を `frontend/` へ移すこと
 - Cloudflare Pages / Workers を本番にすること（[#3](https://github.com/tag0203/kintore-memo/issues/3)、[#5](https://github.com/tag0203/kintore-memo/issues/5) は計画しない方針で閉じた）
-- Go などで別 API を書くこと（[#2](https://github.com/tag0203/kintore-memo/issues/2) は閉じた。当時の後継だった Worker も本番にはしない）
+- Node `backend/` を本番に戻すこと（[#23](https://github.com/tag0203/kintore-memo/issues/23) で Go に寄せた。`worker/` も本番にはしない）
 
 ## Issue
 
@@ -235,7 +237,8 @@ Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `back
 | [#7](https://github.com/tag0203/kintore-memo/issues/7) | この構成方針 |
 | [#8](https://github.com/tag0203/kintore-memo/issues/8) | SAM / CDK で最小の IaC |
 | [#9](https://github.com/tag0203/kintore-memo/issues/9) | Cognito と JWT Authorizer |
-| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（`backend/`。画面の接続は #12） |
+| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（実装は Go の `api/` へ移した。Node `backend/` は非推奨） |
+| [#23](https://github.com/tag0203/kintore-memo/issues/23) | API を Go にする。フロントは React のまま。`worker/` は本番にしない |
 | [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計。[dynamodb.md](./dynamodb.md) |
 | [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える（`src/data/httpClient.ts`） |
 | [#13](https://github.com/tag0203/kintore-memo/issues/13) | Cloudflare DNS、ACM、本番デプロイ |

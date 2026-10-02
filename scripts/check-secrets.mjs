@@ -16,6 +16,7 @@ function isAllowed(path) {
   return (
     path.startsWith("worker/") ||
     path.startsWith("backend/") ||
+    path.startsWith("api/") ||
     path.startsWith("infra/") ||
     path.startsWith("docs/") ||
     allowed.has(path)
