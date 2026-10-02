@@ -13,7 +13,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開 |
 | Lambda | `/api/health` が応答。他の `/api/*` は 501（実装は #10） |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。ユーザー作成とログイン UI は #9 |
-| DynamoDB | オンデマンド。`pk` / `sk` + TTL。エンティティ設計は #11 |
+| DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
 | CloudWatch Logs | Lambda ログ。保持 7 または 14 日（既定 14） |
 | IAM | Lambda は対象テーブル・対象パラメータ・自ログだけ |
@@ -41,6 +41,7 @@ infra/
 docs/
   architecture-aws.md
   aws-deploy.md         このファイル
+  dynamodb.md           単一テーブル（#11）
 ```
 
 ## デプロイ（1 環境）
@@ -186,7 +187,7 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 
 - Cognito ログイン UI とトークン付与（#9）
 - Notion ラッパー API の実装（#10）
-- DynamoDB エンティティ設計の確定（#11）
+- DynamoDB の読み書き API（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
 - 画面の API クライアント差し替え（#12）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
 - GitHub Actions OIDC（#14）

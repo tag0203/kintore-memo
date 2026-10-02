@@ -77,7 +77,8 @@ Resources:
         RefreshToken: days
 
   # ---------------------------------------------------------------------------
-  # DynamoDB (single-table placeholder; entity design is #11)
+  # DynamoDB single table (issue #11). Entities: DayPlan, NotionCache.
+  # pk/sk + ttl. No GSI. Key shapes: docs/dynamodb.md, backend/dynamodb.mjs.
   # ---------------------------------------------------------------------------
   AppTable:
     Type: AWS::DynamoDB::Table
@@ -170,22 +171,17 @@ Resources:
                 Resource:
                   - !GetAtt ApiFunctionLogGroup.Arn
                   - !Sub "${ApiFunctionLogGroup.Arn}:*"
-              - Sid: DynamoDBCrud
+              # DayPlan (#6) and NotionCache (#10) only. Known pk+sk, so no Query/Scan
+              # and no index ARN (the table has no GSI). See docs/dynamodb.md.
+              - Sid: DynamoDBTableAccess
                 Effect: Allow
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                   - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:BatchGetItem
-                  - dynamodb:BatchWriteItem
-                  - dynamodb:ConditionCheckItem
-                  - dynamodb:DescribeTable
                 Resource:
                   - !GetAtt AppTable.Arn
-                  - !Sub "${AppTable.Arn}/index/*"
               - Sid: ReadNotionSecureStrings
                 Effect: Allow
                 Action:

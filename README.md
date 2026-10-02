@@ -55,7 +55,7 @@ npm run dev
 | --- | --- |
 | 種目・重量・回数・セット数・きつさ・日付・タイトル | Notion の1行。保存のたびに追加（上書きしない） |
 | 前回 | その種目で、今日より前の最新1行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | いまはブラウザのセッション。本番は DynamoDB（[#6](https://github.com/tag0203/kintore-memo/issues/6)、設計は [#11](https://github.com/tag0203/kintore-memo/issues/11)） |
+| 今日のメニュー、部位メモ、終了 / 再開 | 本番は DynamoDB の DayPlan 1 項目（[docs/dynamodb.md](docs/dynamodb.md)、読み書きは [#6](https://github.com/tag0203/kintore-memo/issues/6)）。いま画面はブラウザのメモリ |
 
 モックの「最近」は、ピッカーで選んだ順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
 
@@ -102,4 +102,4 @@ sam build
 sam deploy
 ```
 
-後続は Cognito ログイン（[#9](https://github.com/tag0203/kintore-memo/issues/9)）、Lambda の Notion API（[#10](https://github.com/tag0203/kintore-memo/issues/10)）、DynamoDB 設計（[#11](https://github.com/tag0203/kintore-memo/issues/11)）です。
+DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。後続は Cognito ログイン（[#9](https://github.com/tag0203/kintore-memo/issues/9)）、Lambda の Notion API（[#10](https://github.com/tag0203/kintore-memo/issues/10)）、今日のメニューの永続化（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。

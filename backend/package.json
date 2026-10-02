@@ -3,6 +3,6 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Lambda handlers for kintore-memo (skeleton). Notion wiring is #10.",
+  "description": "Lambda handlers for kintore-memo. DayPlan / NotionCache items: dynamodb.mjs. Notion wiring is #10.",
   "main": "index.mjs"
 }

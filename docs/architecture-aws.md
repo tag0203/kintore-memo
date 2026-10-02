@@ -85,7 +85,7 @@ flowchart TB
 | Lambda | Notion ラッパーと DynamoDB の読み書き。常時起動にしない |
 | Cognito User Pool | ログイン。JWT を発行する |
 | JWT Authorizer | API Gateway がトークンを検証する。Lambda に独自認証を積まない |
-| DynamoDB | オンデマンド。アプリ固有データと、任意の短い TTL キャッシュ |
+| DynamoDB | オンデマンドの単一テーブル。DayPlan と任意の短い TTL キャッシュ。[dynamodb.md](./dynamodb.md) |
 | SSM Parameter Store | Notion のトークンとデータベース ID。SecureString。名前と IAM は SAM。値は CFN が SecureString を作れないため CLI で作成（[aws-deploy.md](./aws-deploy.md)） |
 | CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
@@ -102,11 +102,12 @@ SPA はリポジトリ直下のままです。`frontend/` への移動は必須�
 src/                    既存の SPA
 public/
 worker/                 参考実装。本番経路にしない
-backend/                Lambda（骨格。Notion クライアントは #10）
+backend/                Lambda（骨格。テーブル契約は dynamodb.mjs。Notion は #10）
 infra/template.yaml     SAM（#8）
 infra/samconfig.toml
 docs/architecture-aws.md
 docs/aws-deploy.md
+docs/dynamodb.md        単一テーブル（#11）
 .github/workflows/      OIDC デプロイ（#14）
 ```
 
@@ -118,8 +119,8 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 | --- | --- | --- |
 | 種目、重量、回数、セット数、きつさ、日付、タイトル | Notion | 保存のたびに 1 行追加する。上書きしない |
 | 前回 | Notion から導出 | その種目で、今日より前の最新 1 行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB | [#6](https://github.com/tag0203/kintore-memo/issues/6)。設計は [#11](https://github.com/tag0203/kintore-memo/issues/11)。いまはブラウザのメモリ |
-| Notion 応答の短いキャッシュ | DynamoDB（任意） | TTL 付き。正データではない |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | [#6](https://github.com/tag0203/kintore-memo/issues/6)。キーと TTL は [dynamodb.md](./dynamodb.md)。いまはブラウザのメモリ |
+| Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |
 
 初期スコープに入れないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態。
 
@@ -225,7 +226,7 @@ API の形は参考実装に揃えてよいです。
 | [#8](https://github.com/tag0203/kintore-memo/issues/8) | SAM / CDK で最小の IaC |
 | [#9](https://github.com/tag0203/kintore-memo/issues/9) | Cognito と JWT Authorizer |
 | [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API |
-| [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計 |
+| [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計。[dynamodb.md](./dynamodb.md) |
 | [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える |
 | [#13](https://github.com/tag0203/kintore-memo/issues/13) | Cloudflare DNS、ACM、本番デプロイ |
 | [#14](https://github.com/tag0203/kintore-memo/issues/14) | GitHub Actions（OIDC）で CI/CD |
