@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。Notion ラッパーは `backend/`（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12) です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。Notion ラッパーは `backend/`（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面クライアントは `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
 
 ## 目的
 
@@ -152,7 +152,7 @@ Lambda の IAM は、そのパラメータの `GetParameter` と、そのテー�
 5. 通ったリクエストだけが Lambda に届く。
 6. 未認証は API Gateway が拒否する。
 
-User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/issues/8)。ログイン UI・ユーザー作成手順・トークン付与は [#9](https://github.com/tag0203/kintore-memo/issues/9)（[aws-auth.md](./aws-auth.md)）。画面の本番 API 差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12)。
+User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/issues/8)。ログイン UI・ユーザー作成手順・トークン付与は [#9](https://github.com/tag0203/kintore-memo/issues/9)（[aws-auth.md](./aws-auth.md)）。画面の本番 API は `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。
 
 ## レート制限とキャッシュ
 
@@ -164,7 +164,7 @@ User Pool / Authorizer の IaC は [#8](https://github.com/tag0203/kintore-memo/
 - 成功した書き込みのあと、クライアントのキャッシュを更新する。
 - DynamoDB に短い TTL の応答キャッシュを置いてもよい。画面遷移の代替にはしない。
 
-Lambda（`backend/`）はこれを次の形で行う。画面の差し替え（[#12](https://github.com/tag0203/kintore-memo/issues/12)）の前でも、API 単体では同じ契約です。
+Lambda（`backend/`）はこれを次の形で行う。画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）は遷移のたびに API を呼ばず、起動時の bootstrap と保存だけです。API 単体も同じ契約です。
 
 - `GET /api/bootstrap?date=YYYY-MM-DD` が種目一覧、最近、指定種目（`exercise` の繰り返し、または `exercises=a,b`）の前回と当日を返す。`date` は画面のセッション日付で、サーバーの UTC 今日では上書きしない。
 - 種目一覧と「最近 100 件」のウィンドウを 300 秒共有する。2 回目の bootstrap は、ウィンドウで足りる限り Notion を呼ばない。
@@ -183,7 +183,7 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - `POST /api/logs`
 - bootstrap の一括取得（推奨）
 
-Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面の差し替えは [#12](https://github.com/tag0203/kintore-memo/issues/12) です。
+Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
 
 ## コスト
 
@@ -237,7 +237,7 @@ Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `back
 | [#9](https://github.com/tag0203/kintore-memo/issues/9) | Cognito と JWT Authorizer |
 | [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（`backend/`。画面の接続は #12） |
 | [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計。[dynamodb.md](./dynamodb.md) |
-| [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える |
+| [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える（`src/data/httpClient.ts`） |
 | [#13](https://github.com/tag0203/kintore-memo/issues/13) | Cloudflare DNS、ACM、本番デプロイ |
 | [#14](https://github.com/tag0203/kintore-memo/issues/14) | GitHub Actions（OIDC）で CI/CD |
 

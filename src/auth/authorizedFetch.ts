@@ -1,6 +1,6 @@
 /**
  * API Gateway へ JWT 付きで呼ぶ薄いラッパ。
- * WorkoutLogClient の本番実装（#12）がこれを使う想定。
+ * HTTP の WorkoutLogClient がこれを使う。
  * IdToken を Authorization: Bearer に載せる（HTTP API JWT Authorizer の audience = App Client）。
  */
 export async function authorizedFetch(

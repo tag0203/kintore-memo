@@ -5,7 +5,7 @@ import { createSeed } from "./seed";
 let singleton: WorkoutLogClient | null = null;
 
 /**
- * ブラウザ用のクライアント。
+ * API ベース URL が無いときのブラウザ用クライアント。
  * このタブのメモリだけを使い、再読み込みで初期データに戻る。
  * サーバの資格情報はここから参照しない。
  */

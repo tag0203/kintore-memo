@@ -191,6 +191,6 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 
 - Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
 - DynamoDB のメニュー読み書き（設計は [dynamodb.md](./dynamodb.md)、永続化の実装は #6）
-- 画面の API クライアント差し替え（#12）
+- 画面の API クライアント差し替え（#12。実装は `src/data/httpClient.ts`）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
 - GitHub Actions OIDC（#14）

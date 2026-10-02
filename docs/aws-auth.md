@@ -7,7 +7,7 @@ Issue [#9](https://github.com/tag0203/kintore-memo/issues/9)。IaC の User Pool
 - **Hosted UI は使わない**。SPA の自前フォーム（メール＋パスワード）
 - API Gateway HTTP API の **JWT Authorizer** が IdToken を検証する
 - Lambda に独自認証は積まない
-- 画面のデータ取得を本番 API に差し替えるのは [#12](https://github.com/tag0203/kintore-memo/issues/12)
+- ログイン後の記録取得は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。`VITE_API_BASE_URL` が空ならモックのまま
 
 ## 前提
 
@@ -71,7 +71,7 @@ npm run dev
 
 - 3 つの `VITE_COGNITO_*` が揃っているときだけログイン画面が出ます
 - 未設定のままだと従来どおりインメモリモックだけで動きます（トークン不要）
-- `VITE_API_BASE_URL` は #12 の HTTP クライアント用。無くてもログイン自体は動きます
+- `VITE_API_BASE_URL` は HTTP クライアントのベース URL。無くてもログイン自体は動き、記録はモックのまま
 
 本番ビルド前にも同じ変数を渡します（値はビルド成果物に埋め込まれます。秘密ではない）。
 
@@ -82,7 +82,7 @@ npm run dev
 - トークンは `localStorage` の `kintore-memo.auth.v1` に保存。ログアウトで消す
 - 期限切れ近くでは RefreshToken で IdToken を取り直す
 
-`src/auth/authorizedFetch.ts` がその付与の薄いラッパです。`WorkoutLogClient` の差し替えはまだしません（#12）。
+`src/auth/authorizedFetch.ts` がその付与の薄いラッパです。`src/data/httpClient.ts` の `WorkoutLogClient` が、起動時の bootstrap と保存の POST でこれを使います（#12）。
 
 ## curl で JWT 付き API を試す
 
@@ -115,7 +115,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 ## ローカル SPA × デプロイ済み API
 
-`infra/template.yaml` の CORS は CloudFront オリジンに加え `http://localhost:5173` と `http://localhost:4173` を許可しています。#12 で `authorizedFetch` から実 API を叩くときに使います。
+`infra/template.yaml` の CORS は CloudFront オリジンに加え `http://localhost:5173` と `http://localhost:4173` を許可しています。ローカルの SPA が `authorizedFetch` から実 API を叩くときに使います。
 
 `sam local` では Cognito Authorizer は効きません（[aws-deploy.md](./aws-deploy.md)）。
 
@@ -123,5 +123,4 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
 
 - ソーシャルログイン
 - Hosted UI / カスタムドメインの Cognito ドメイン
-- `WorkoutLogClient` の HTTP 実装と画面の bootstrap（#12）
 - ユーザーのセルフサインアップ UI

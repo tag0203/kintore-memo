@@ -30,21 +30,24 @@ npm run dev
 | `npm run preview` | ビルド結果を <http://localhost:4173> で確認 |
 | `npm run check:secrets` | ブラウザ側のソースと `dist/` に Notion のトークン類が無いことを確認 |
 
-再読み込みするとモックの記録は初期データに戻ります。部位メモと「今日のメニュー」「終了」もメモリ上だけで、リロードで戻ります。
+Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記録は API Gateway 経由です。どちらかが無いときはモックで、再読み込みすると記録は初期データに戻ります。部位メモと「今日のメニュー」「終了」はどちらもメモリ上だけで、リロードで戻ります。
 
 初期データは起動日を基準にしています。スクワットとレッグプレスは昨日の記録、レッグカールは今日も記録済み、です。
 
 ## データの境界
 
-画面がいま呼ぶ経路はインメモリのモックです。本番の Notion アクセスは **API Gateway → Lambda（`backend/`）** だけで、ブラウザは Notion を直接呼びません。トークンは SSM SecureString です。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
+画面は `WorkoutLogClient` だけを見ます。本番の Notion アクセスは **API Gateway → Lambda（`backend/`）** だけで、ブラウザは Notion を直接呼びません。トークンは SSM SecureString です。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
 
 `worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Lambda は `worker/` を import せず、同じ形を `backend/` に持っています。
 
 ```text
 ブラウザ（React）
   WorkoutLogClient
-    └─ インメモリのモック   ← 画面がいま使う経路。src/data/browserClient.ts
-         本番の差し替えは #12（セッション開始で bootstrap を取り、遷移はクライアントキャッシュ）
+    ├─ HTTP（src/data/httpClient.ts）
+    │    Cognito の IdToken + VITE_API_BASE_URL があるとき
+    │    起動時 GET /api/bootstrap、保存時 POST /api/logs、遷移はキャッシュ
+    └─ インメモリのモック（src/data/browserClient.ts）
+         Cognito か API ベース URL が無いとき
 
 本番
   API Gateway（JWT Authorizer。Lambda はトークンを再検証しない）
@@ -57,7 +60,7 @@ npm run dev
   worker/notionClient.ts
 ```
 
-画面は `src/data/client.ts` の `WorkoutLogClient` だけを見ます。Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` の `VITE_` は Cognito / API の公開設定だけです（秘密ではない）。Notion のキーには `VITE_` を付けません。
+Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` の `VITE_` は Cognito / API の公開設定だけです（秘密ではない）。Notion のキーには `VITE_` を付けません。
 
 ### Lambda の API
 
@@ -76,6 +79,8 @@ npm run dev
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 
 レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。`POST /api/logs` のあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、`backend/dynamodb.mjs` が組み立てます。
+
+画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）はセッション開始の `GET /api/bootstrap` と、保存の `POST /api/logs` だけを呼びます。種目一覧・前回・当日の個別 GET は使いません。保存に成功した行でローカルキャッシュを更新し、ホームの「記録済」と前回表示は再取得しません。
 
 | 状態 | どこに置くか |
 | --- | --- |
@@ -130,4 +135,4 @@ sam deploy
 
 Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
 
-DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。Lambda の Notion API は `backend/` です（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。残るのは今日のメニューの永続化（[#6](https://github.com/tag0203/kintore-memo/issues/6)）と、画面の API 差し替え（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。Lambda の Notion API は `backend/` です（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面の API クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。残るのは今日のメニューの永続化（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。
