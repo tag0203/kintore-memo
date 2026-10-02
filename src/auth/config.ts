@@ -2,7 +2,7 @@ export interface CognitoConfig {
   region: string;
   userPoolId: string;
   clientId: string;
-  /** API Gateway ベース URL（末尾スラッシュなし）。#12 用。無くてもログインは動く */
+  /** API Gateway ベース URL（末尾スラッシュなし）。無いときは記録だけモックのまま */
   apiBaseUrl: string | null;
 }
 

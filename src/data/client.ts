@@ -2,8 +2,8 @@ import type { ExerciseLog, ExerciseSummary, NewExerciseLog } from "../domain";
 
 /**
  * トレーニング記録の読み書き口。
- * ブラウザはインメモリのモック実装だけを使う。本番 API への差し替えは #12。
- * Notion の本番経路は Lambda（backend/）。worker/ は参考で、画面のバンドルには入れない。
+ * 本番は API Gateway（Cognito の JWT のみ）。API ベース URL が無いときはインメモリのモック。
+ * Notion のトークンはブラウザに置かない。worker/ は参考で、画面のバンドルには入れない。
  */
 export interface WorkoutLogClient {
   listExercises(): Promise<ExerciseSummary[]>;
