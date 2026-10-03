@@ -99,7 +99,7 @@ DayPlan の書き込みは、Asia/Tokyo の当日・前日・翌日の `date` �
 
 | 操作 | API | 呼び元 |
 | --- | --- | --- |
-| その日の DayPlan を読む | `GetItem` | Go の `GET /api/day-plan`（画面の接続は #6） |
+| その日の DayPlan を読む | `GetItem`（強い整合性） | Go の `GET /api/day-plan`（画面の接続は #6）。リロードが保存直後の項目を返すため。NotionCache の `GetItem` は既定の結果整合性 |
 | DayPlan を書く | `PutItem`（全体） | Go の `PUT /api/day-plan`（画面の接続は #6） |
 | キャッシュを読む | `GetItem` | Go API |
 | キャッシュを書く | `PutItem` | Go API |

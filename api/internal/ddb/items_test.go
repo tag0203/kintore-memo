@@ -82,6 +82,27 @@ func TestDayPlanItemRoundTrip(t *testing.T) {
 	if strings.Join(trimmed.Exercises, ",") != "レッグカール,スクワット" {
 		t.Fatalf("exercises = %#v", trimmed.Exercises)
 	}
+
+	empty := plan(t, "", []string{}, false, "2026-10-02")
+	read, err = ReadDayPlanItem(empty)
+	if err != nil || read.Memo != "" || read.Exercises == nil || len(read.Exercises) != 0 || read.Finished {
+		t.Fatalf("empty read = %+v %v", read, err)
+	}
+	empty.NoteStoredAttributes(false, true, true)
+	if codeOf(t, mustReadErr(empty)) != "memo_invalid" {
+		t.Fatal("missing memo")
+	}
+	empty = plan(t, "", []string{}, false, "2026-10-02")
+	empty.NoteStoredAttributes(true, false, true)
+	empty.Exercises = nil
+	if codeOf(t, mustReadErr(empty)) != "exercises_invalid" {
+		t.Fatal("missing exercises")
+	}
+	empty = plan(t, "", []string{}, false, "2026-10-02")
+	empty.NoteStoredAttributes(true, true, false)
+	if codeOf(t, mustReadErr(empty)) != "finished_invalid" {
+		t.Fatal("missing finished")
+	}
 }
 
 func TestDayPlanWindowAndRejects(t *testing.T) {

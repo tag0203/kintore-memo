@@ -17,8 +17,9 @@ type Store interface {
 }
 
 // Table is the subset of the DynamoDB adapter this package needs.
+// DayPlan reads are strongly consistent. Notion-cache reads stay on Get.
 type Table interface {
-	Get(ctx context.Context, table, pk, sk string, dest any) (bool, error)
+	GetConsistent(ctx context.Context, table, pk, sk string, dest any) (bool, error)
 	Put(ctx context.Context, table string, item any) error
 }
 
@@ -71,12 +72,9 @@ func NewDynamo(table string, api Table) *Dynamo {
 
 func (d *Dynamo) Get(ctx context.Context, pk, sk string) (*ddb.DayPlanItem, error) {
 	var item ddb.DayPlanItem
-	found, err := d.api.Get(ctx, d.table, pk, sk, &item)
+	found, err := d.api.GetConsistent(ctx, d.table, pk, sk, &item)
 	if err != nil || !found {
 		return nil, err
-	}
-	if item.Exercises == nil {
-		item.Exercises = []string{}
 	}
 	return &item, nil
 }
@@ -180,7 +178,7 @@ func toDTO(item ddb.DayPlanItem) model.DayPlan {
 	return model.DayPlan{
 		Date:      item.Date,
 		Memo:      item.Memo,
-		Exercises: append([]string(nil), item.Exercises...),
+		Exercises: copyExercises(item.Exercises),
 		Finished:  item.Finished,
 		UpdatedAt: &updated,
 	}
@@ -206,6 +204,14 @@ func exerciseNames(value any) ([]string, error) {
 }
 
 func cloneItem(item ddb.DayPlanItem) ddb.DayPlanItem {
-	item.Exercises = append([]string(nil), item.Exercises...)
+	item.Exercises = copyExercises(item.Exercises)
 	return item
+}
+
+// copyExercises keeps a stored empty list distinct from a missing one.
+func copyExercises(exercises []string) []string {
+	if exercises == nil {
+		return nil
+	}
+	return append([]string{}, exercises...)
 }

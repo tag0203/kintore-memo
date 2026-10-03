@@ -302,6 +302,37 @@ func TestDayPlanContract(t *testing.T) {
 	if res.StatusCode != 502 || !strings.Contains(res.Body, `"error":"storage"`) || strings.Contains(res.Body, "entity_type") {
 		t.Fatalf("stored %d %s", res.StatusCode, res.Body)
 	}
+
+	ttl, err := ddb.DayPlanTTLEpochSeconds("2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	omitted := dayplan.NewMemory()
+	if err := omitted.Put(context.Background(), ddb.DayPlanItem{
+		PK: "USER#" + userID, SK: "DAY#2026-10-02", EntityType: ddb.EntityDayPlan,
+		UserID: userID, Date: "2026-10-02", Memo: "", Exercises: []string{}, Finished: false,
+		UpdatedAt: "2026-10-02T00:00:00.000Z", TTL: ttl,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h = testHandler(&fakeBackend{}, map[string]string{}, omitted)
+	res, _ = h.Handle(context.Background(), event)
+	if res.StatusCode != 502 || !strings.Contains(res.Body, `"error":"storage"`) || strings.Contains(res.Body, `"exercises":[]`) {
+		t.Fatalf("omitted %d %s", res.StatusCode, res.Body)
+	}
+
+	blank := dayplan.NewMemory()
+	h = testHandler(&fakeBackend{}, map[string]string{}, blank)
+	emptyMenu := httpEvent("PUT", "/api/day-plan", "$default", "", `{"date":"2026-10-02","memo":"","exercises":[],"finished":false}`, false)
+	emptyMenu.RequestContext.Authorizer = jwtAuth(userID)
+	res, _ = h.Handle(context.Background(), emptyMenu)
+	if res.StatusCode != 200 || !strings.Contains(res.Body, `"memo":""`) || !strings.Contains(res.Body, `"exercises":[]`) || !strings.Contains(res.Body, `"finished":false`) {
+		t.Fatalf("empty menu put %d %s", res.StatusCode, res.Body)
+	}
+	res, _ = h.Handle(context.Background(), event)
+	if res.StatusCode != 200 || !strings.Contains(res.Body, `"exercises":[]`) || !strings.Contains(res.Body, `"finished":false`) {
+		t.Fatalf("empty menu get %d %s", res.StatusCode, res.Body)
+	}
 }
 
 func jwtAuth(sub string) *events.APIGatewayV2HTTPRequestContextAuthorizerDescription {

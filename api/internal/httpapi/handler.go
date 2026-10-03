@@ -44,7 +44,7 @@ type Deps struct {
 	NewClient   func(token, databaseID string) notion.Backend
 	DayPlan     dayplan.Store
 	Parameters  secrets.Getter
-	Dynamo      cache.Remote
+	Dynamo      tableAPI
 }
 
 // Handler serves API Gateway HTTP API payload v2.
@@ -55,7 +55,7 @@ type Handler struct {
 	json        *cache.JSON
 	newClient   func(token, databaseID string) notion.Backend
 	dayPlan     dayplan.Store
-	dynamo      cache.Remote
+	dynamo      tableAPI
 
 	mu       sync.Mutex
 	services map[string]*notion.Service
@@ -91,6 +91,13 @@ func New(deps Deps) *Handler {
 	}
 	h.json = cache.NewJSON(store, now)
 	return h
+}
+
+// tableAPI is the shared DynamoDB port. NotionCache uses Get.
+// DayPlan uses GetConsistent so a reload sees the item just written.
+type tableAPI interface {
+	cache.Remote
+	GetConsistent(ctx context.Context, table, pk, sk string, dest any) (bool, error)
 }
 
 func defaultCache(getenv func(string) string, api cache.Remote, now func() time.Time) cache.Store {

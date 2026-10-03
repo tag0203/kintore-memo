@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+
+	"github.com/tag0203/kintore-memo/api/internal/ddb"
 )
 
 // Client implements the cache and DayPlan table port, plus SSM GetParameter.
@@ -26,14 +28,18 @@ func New(cfg aws.Config) *Client {
 }
 
 // Get reads one item into dest. found is false when the key is absent.
+// The read is eventually consistent. DayPlan uses GetConsistent.
 func (c *Client) Get(ctx context.Context, table, pk, sk string, dest any) (bool, error) {
-	out, err := c.dynamo.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(table),
-		Key: map[string]types.AttributeValue{
-			"pk": &types.AttributeValueMemberS{Value: pk},
-			"sk": &types.AttributeValueMemberS{Value: sk},
-		},
-	})
+	return c.get(ctx, table, pk, sk, dest, false)
+}
+
+// GetConsistent is a strongly consistent GetItem for DayPlan reloads.
+func (c *Client) GetConsistent(ctx context.Context, table, pk, sk string, dest any) (bool, error) {
+	return c.get(ctx, table, pk, sk, dest, true)
+}
+
+func (c *Client) get(ctx context.Context, table, pk, sk string, dest any, consistent bool) (bool, error) {
+	out, err := c.dynamo.GetItem(ctx, newGetItemInput(table, pk, sk, consistent))
 	if err != nil {
 		return false, err
 	}
@@ -43,7 +49,35 @@ func (c *Client) Get(ctx context.Context, table, pk, sk string, dest any) (bool,
 	if err := attributevalue.UnmarshalMap(out.Item, dest); err != nil {
 		return false, err
 	}
+	noteDayPlan(dest, out.Item)
 	return true, nil
+}
+
+func newGetItemInput(table, pk, sk string, consistent bool) *dynamodb.GetItemInput {
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: pk},
+			"sk": &types.AttributeValueMemberS{Value: sk},
+		},
+	}
+	if consistent {
+		input.ConsistentRead = aws.Bool(true)
+	}
+	return input
+}
+
+// noteDayPlan records attribute presence. Zero values from a missing
+// memo, exercises, or finished attribute are not a stored empty menu.
+func noteDayPlan(dest any, item map[string]types.AttributeValue) {
+	plan, ok := dest.(*ddb.DayPlanItem)
+	if !ok {
+		return
+	}
+	_, memo := item["memo"].(*types.AttributeValueMemberS)
+	_, exercises := item["exercises"].(*types.AttributeValueMemberL)
+	_, finished := item["finished"].(*types.AttributeValueMemberBOOL)
+	plan.NoteStoredAttributes(memo, exercises, finished)
 }
 
 // Put writes the whole item. The same key replaces the previous attributes.

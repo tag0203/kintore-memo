@@ -40,4 +40,36 @@ func TestMarshalDayPlanKeepsEmptyMenu(t *testing.T) {
 	if _, ok := av["pk"].(*types.AttributeValueMemberS); !ok {
 		t.Fatal("pk missing")
 	}
+
+	var decoded ddb.DayPlanItem
+	if err := attributevalue.UnmarshalMap(av, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	noteDayPlan(&decoded, av)
+	if _, err := ddb.ReadDayPlanItem(decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	delete(av, "memo")
+	delete(av, "exercises")
+	delete(av, "finished")
+	decoded = ddb.DayPlanItem{}
+	if err := attributevalue.UnmarshalMap(av, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	noteDayPlan(&decoded, av)
+	if _, err := ddb.ReadDayPlanItem(decoded); err == nil {
+		t.Fatal("omitted zero attributes were accepted")
+	}
+}
+
+func TestDayPlanGetItemConsistentRead(t *testing.T) {
+	eventual := newGetItemInput("kintore-memo-dev", "USER#sub", "DAY#2026-10-02", false)
+	if eventual.ConsistentRead != nil {
+		t.Fatalf("cache read consistent = %v", *eventual.ConsistentRead)
+	}
+	strong := newGetItemInput("kintore-memo-dev", "USER#sub", "DAY#2026-10-02", true)
+	if strong.ConsistentRead == nil || !*strong.ConsistentRead {
+		t.Fatal("DayPlan read is not strongly consistent")
+	}
 }

@@ -215,6 +215,22 @@ type DayPlanItem struct {
 	Finished   bool     `dynamodbav:"finished"`
 	UpdatedAt  string   `dynamodbav:"updatedAt"`
 	TTL        int64    `dynamodbav:"ttl"`
+	// Presence of the zero-valued attributes. Unmarshal leaves these false
+	// when the stored map omits them. Build and a successful read set them.
+	memoSet      bool
+	exercisesSet bool
+	finishedSet  bool
+}
+
+// NoteStoredAttributes records whether memo, exercises, and finished were
+// present. An empty string, an empty list, and false are present.
+func (item *DayPlanItem) NoteStoredAttributes(memo, exercises, finished bool) {
+	if item == nil {
+		return
+	}
+	item.memoSet = memo
+	item.exercisesSet = exercises
+	item.finishedSet = finished
 }
 
 // DayPlanInput is the writable menu. UserID comes from the JWT sub.
@@ -269,7 +285,7 @@ func BuildDayPlanItem(input DayPlanInput) (DayPlanItem, error) {
 	if err != nil {
 		return DayPlanItem{}, err
 	}
-	return DayPlanItem{
+	item := DayPlanItem{
 		PK:         key.PK,
 		SK:         key.SK,
 		EntityType: EntityDayPlan,
@@ -280,7 +296,9 @@ func BuildDayPlanItem(input DayPlanInput) (DayPlanItem, error) {
 		Finished:   input.Finished,
 		UpdatedAt:  isoMillis(now),
 		TTL:        ttl,
-	}, nil
+	}
+	item.NoteStoredAttributes(true, true, true)
+	return item, nil
 }
 
 // ReadDayPlanItem checks a stored item still matches the key and TTL rules.
@@ -313,18 +331,24 @@ func ReadDayPlanItem(item DayPlanItem) (DayPlanItem, error) {
 	if item.TTL != ttl {
 		return DayPlanItem{}, invalid("ttl", "DayPlan ttl does not match the session date")
 	}
+	if !item.memoSet {
+		return DayPlanItem{}, invalid("memo_invalid", "memo must be a string")
+	}
 	memo, err := normalizeMemo(item.Memo)
 	if err != nil {
 		return DayPlanItem{}, err
 	}
-	if item.Exercises == nil {
+	if !item.exercisesSet || item.Exercises == nil {
 		return DayPlanItem{}, invalid("exercises_invalid", "exercises must be an array")
 	}
 	exercises, err := normalizeExercises(item.Exercises)
 	if err != nil {
 		return DayPlanItem{}, err
 	}
-	return DayPlanItem{
+	if !item.finishedSet {
+		return DayPlanItem{}, invalid("finished_invalid", "finished must be a boolean")
+	}
+	read := DayPlanItem{
 		PK:         key.PK,
 		SK:         key.SK,
 		EntityType: EntityDayPlan,
@@ -335,7 +359,9 @@ func ReadDayPlanItem(item DayPlanItem) (DayPlanItem, error) {
 		Finished:   item.Finished,
 		UpdatedAt:  item.UpdatedAt,
 		TTL:        ttl,
-	}, nil
+	}
+	read.NoteStoredAttributes(true, true, true)
+	return read, nil
 }
 
 // NotionCacheTTLEpochSeconds is now plus 300 seconds.
