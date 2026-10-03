@@ -90,7 +90,7 @@ repo:tag0203@20207728/kintore-memo@1389679197:ref:refs/heads/main
 | --- | --- |
 | CloudFormation | スタック `kintore-memo-dev` / `staging` / `prod` と、SAM が成果物バケットに使う `aws-sam-cli-managed-default`。SAM Transform。`ValidateTemplate` のみリソース `*` |
 | S3 | SPA バケット `kintore-memo-*-spa-<account>` と SAM 管理バケット。`ListAllMyBuckets` のみ `*`。ACL の付与はしない |
-| Lambda / ログ | 関数名 `kintore-memo-*-api` と、そのロググループ |
+| Lambda / ログ | 関数名 `kintore-memo-*-api` と、そのロググループ。`logs:DescribeLogGroups` だけはリソースを指定できないので `*` |
 | IAM | ロール `kintore-memo-*-api` の作成とインラインポリシー、`iam:PassRole` は `lambda.amazonaws.com` だけ。API Gateway のサービスリンクロールを一度だけ作る権限 |
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
 | HTTP API | そのリージョンの `/apis` と `/tags` |

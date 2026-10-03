@@ -236,12 +236,16 @@ Resources:
                   - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-dev
                   - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-staging
                   - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-prod
+              # DescribeLogGroups is a list action with no resource type, so a log-group ARN does not grant it.
+              - Sid: DescribeApiLogGroups
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
               - Sid: ApiLogGroups
                 Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:DeleteLogGroup
-                  - logs:DescribeLogGroups
                   - logs:PutRetentionPolicy
                   - logs:DeleteRetentionPolicy
                   - logs:ListTagsForResource
