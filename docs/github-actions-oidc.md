@@ -95,7 +95,7 @@ repo:tag0203@20207728/kintore-memo@1389679197:ref:refs/heads/main
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
 | HTTP API | そのリージョンの `/apis` と `/tags` |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
-| CloudFront | ディストリビューションの作成は `*`。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
+| CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
 
 意図的に外しているもの:
 
@@ -113,8 +113,8 @@ repo:tag0203@20207728/kintore-memo@1389679197:ref:refs/heads/main
 
 行うことは次のとおりです。
 
-1. 画面を `npm run build` し、`npm run check:secrets` で `dist/` を見る
-2. `sam build` してから `sam deploy`（変更セットの確認待ちはしない）。スタック名は `kintore-memo-<environment>`
+1. `sam build` してから `sam deploy`（変更セットの確認待ちはしない）。スタック名は `kintore-memo-<environment>`。初回も先にスタックを作る
+2. 公開出力 `UserPoolId`、`UserPoolClientId`、`HttpApiUrl` だけを `VITE_COGNITO_*` と `VITE_API_BASE_URL` にしてから `npm run build` する。SSM は読まない。値が成果物に入ったことを確認し、`npm run check:secrets` で `dist/` を見る
 3. 出力 `SpaBucketName` が `kintore-memo-<environment>-spa-<account>` のときだけ `aws s3 sync dist/` する
 4. 出力のディストリビューション ID に対して `/*` を無効化する
 

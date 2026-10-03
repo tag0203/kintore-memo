@@ -104,14 +104,6 @@ jobs:
           output-credentials: false
           output-env-credentials: true
 
-      - name: Build SPA
-        if: steps.gate.outputs.configured == 'true'
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run build
-          npm run check:secrets
-
       - name: sam build and deploy
         if: steps.gate.outputs.configured == 'true'
         working-directory: infra
@@ -137,6 +129,59 @@ jobs:
             --no-fail-on-empty-changeset \
             --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14"
           echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
+
+      - name: Build SPA from stack outputs
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          case "${ENVIRONMENT}" in
+            dev|staging|prod) ;;
+            *)
+              echo "Unsupported environment."
+              exit 1
+              ;;
+          esac
+          STACK="kintore-memo-${ENVIRONMENT}"
+          read_output() {
+            aws cloudformation describe-stacks \
+              --region ap-northeast-1 \
+              --stack-name "${STACK}" \
+              --query "Stacks[0].Outputs[?OutputKey=='${1}'].OutputValue" \
+              --output text
+          }
+          USER_POOL_ID="$(read_output UserPoolId)"
+          CLIENT_ID="$(read_output UserPoolClientId)"
+          API_URL="$(read_output HttpApiUrl)"
+          API_URL="${API_URL%/}"
+          if ! [[ "${USER_POOL_ID}" =~ ^ap-northeast-1_[A-Za-z0-9]+$ ]]; then
+            echo "Refusing to build: UserPoolId did not match the Cognito pool id pattern."
+            exit 1
+          fi
+          if ! [[ "${CLIENT_ID}" =~ ^[A-Za-z0-9]+$ ]]; then
+            echo "Refusing to build: UserPoolClientId did not match the app client id pattern."
+            exit 1
+          fi
+          if ! [[ "${API_URL}" =~ ^https://[a-z0-9]+\.execute-api\.ap-northeast-1\.amazonaws\.com/${ENVIRONMENT}$ ]]; then
+            echo "Refusing to build: HttpApiUrl did not match the HTTP API URL pattern."
+            exit 1
+          fi
+          # Public stack outputs only. Do not print them; they are embedded in dist/.
+          export VITE_COGNITO_REGION=ap-northeast-1
+          export VITE_COGNITO_USER_POOL_ID="${USER_POOL_ID}"
+          export VITE_COGNITO_CLIENT_ID="${CLIENT_ID}"
+          export VITE_API_BASE_URL="${API_URL}"
+          npm ci
+          npm run build
+          npm run check:secrets
+          if ! grep -R -q -F -- "${USER_POOL_ID}" dist/ \
+            || ! grep -R -q -F -- "${CLIENT_ID}" dist/ \
+            || ! grep -R -q -F -- "${API_URL}" dist/; then
+            echo "Build output is missing the public Cognito or API settings. Refusing to publish."
+            exit 1
+          fi
+          echo "SPA build embedded the public Cognito and API settings for ${ENVIRONMENT}."
 
       - name: Publish SPA
         if: steps.gate.outputs.configured == 'true'
