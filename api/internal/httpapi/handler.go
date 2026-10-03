@@ -259,22 +259,27 @@ func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HT
 		}
 	}
 	if err != nil {
-		var invalid *ddb.ItemValidationError
-		if errors.As(err, &invalid) {
-			if invalid.Code == "user_id" {
-				return jsonResponse(401, map[string]string{
-					"error":   "unauthorized",
-					"message": "ログインが必要です",
+		// A bad stored item is StorageError wrapping ItemValidationError.
+		// errors.As unwraps, so storage has to be classified before request validation.
+		var stored *dayplan.StorageError
+		if !errors.As(err, &stored) {
+			var invalid *ddb.ItemValidationError
+			if errors.As(err, &invalid) {
+				if invalid.Code == "user_id" {
+					return jsonResponse(401, map[string]string{
+						"error":   "unauthorized",
+						"message": "ログインが必要です",
+					})
+				}
+				return jsonResponse(400, map[string]string{"error": invalid.Code, "message": invalid.Error()})
+			}
+			var syntaxErr *syntax.Error
+			if errors.As(err, &syntaxErr) {
+				return jsonResponse(400, map[string]string{
+					"error":   "invalid_json",
+					"message": "JSON を確認してください",
 				})
 			}
-			return jsonResponse(400, map[string]string{"error": invalid.Code, "message": invalid.Error()})
-		}
-		var syntaxErr *syntax.Error
-		if errors.As(err, &syntaxErr) {
-			return jsonResponse(400, map[string]string{
-				"error":   "invalid_json",
-				"message": "JSON を確認してください",
-			})
 		}
 		log.Printf("day plan failed %T", err)
 		return jsonResponse(502, map[string]string{

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tag0203/kintore-memo/api/internal/cache"
 	"github.com/tag0203/kintore-memo/api/internal/dayplan"
+	"github.com/tag0203/kintore-memo/api/internal/ddb"
 	"github.com/tag0203/kintore-memo/api/internal/model"
 	"github.com/tag0203/kintore-memo/api/internal/notion"
 	"github.com/tag0203/kintore-memo/api/internal/secrets"
@@ -286,6 +287,20 @@ func TestDayPlanContract(t *testing.T) {
 	res, _ = h.Handle(context.Background(), far)
 	if res.StatusCode != 400 || !strings.Contains(res.Body, `"error":"date_window"`) {
 		t.Fatalf("window %d %s", res.StatusCode, res.Body)
+	}
+
+	broken := dayplan.NewMemory()
+	if err := broken.Put(context.Background(), ddb.DayPlanItem{
+		PK: "USER#" + userID, SK: "DAY#2026-10-02", EntityType: "LegacyPlan",
+		UserID: userID, Date: "2026-10-02", Memo: "脚", Exercises: []string{"スクワット"},
+		UpdatedAt: "2026-10-02T00:00:00.000Z", TTL: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h = testHandler(&fakeBackend{}, map[string]string{}, broken)
+	res, _ = h.Handle(context.Background(), event)
+	if res.StatusCode != 502 || !strings.Contains(res.Body, `"error":"storage"`) || strings.Contains(res.Body, "entity_type") {
+		t.Fatalf("stored %d %s", res.StatusCode, res.Body)
 	}
 }
 
