@@ -90,7 +90,7 @@ flowchart TB
 | CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
-| GitHub Actions + OIDC | デプロイ。長期のアクセスキーは置かない |
+| GitHub Actions + OIDC | CI は毎回。デプロイは OIDC の手動実行。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
@@ -105,11 +105,13 @@ worker/                 参考実装。本番経路にしない
 backend/                Lambda Notion ラッパー（#10）。項目は dynamodb.mjs。worker/ は import しない
 infra/template.yaml     SAM（#8）
 infra/samconfig.toml
+infra/github-oidc.yaml  デプロイ用 IAM（bootstrap。Actions からは作らない）
 docs/architecture-aws.md
 docs/aws-deploy.md
 docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
-.github/workflows/      OIDC デプロイ（#14）
+docs/github-actions-oidc.md
+.github/workflows/      CI と、手動の OIDC デプロイ（#14）
 ```
 
 ## Notion と DynamoDB
@@ -136,6 +138,7 @@ Notion の列名と型は README の「Notion の形」が正です。実デー�
 | Notion トークン、データベース ID | SSM Parameter Store の SecureString。読むのは Lambda だけ。名前と IAM は SAM。値は CLI で作成（CFN は SecureString 非対応） |
 | Cognito のクライアント ID、API のベース URL | ブラウザに出てよい。秘密ではない |
 | ローカルの控え | `.env`（gitignore 済み）。コミットしない |
+| Actions から AWS へのデプロイ | OIDC ロール ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に置く。アクセスキーは Secrets に置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 Lambda の IAM は、そのパラメータの `GetParameter` と、そのテーブル、自分のロググループに限定します。`npm run check:secrets` は、ブラウザ側と `dist/` に Notion のトークン類が無いことを確認するために残します。
 
