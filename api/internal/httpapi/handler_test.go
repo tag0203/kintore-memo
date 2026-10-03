@@ -189,8 +189,16 @@ func TestCreateLogValidationAndBase64(t *testing.T) {
 	}
 
 	payload := `{"exercise":"スクワット","weightKg":82.5,"reps":11,"sets":3,"difficulty":3,"date":"2026-10-02"}`
+	trailing, _ := h.Handle(context.Background(), httpEvent("POST", "/api/logs", "$default", "", payload+`{"extra":1}`, false))
+	if trailing.StatusCode != 400 || backend.created != 0 || !strings.Contains(trailing.Body, "JSON を確認してください") {
+		t.Fatalf("trailing %d created %d %s", trailing.StatusCode, backend.created, trailing.Body)
+	}
+	spaced, _ := h.Handle(context.Background(), httpEvent("POST", "/api/logs", "$default", "", payload+"\n", false))
+	if spaced.StatusCode != 201 || backend.created != 1 {
+		t.Fatalf("whitespace %d created %d %s", spaced.StatusCode, backend.created, spaced.Body)
+	}
 	res, _ = h.Handle(context.Background(), httpEvent("POST", "/api/logs", "$default", "", base64.StdEncoding.EncodeToString([]byte(payload)), true))
-	if res.StatusCode != 201 || backend.created != 1 || !strings.Contains(res.Body, `"weightKg":82.5`) || strings.Contains(res.Body, "secret_token") {
+	if res.StatusCode != 201 || backend.created != 2 || !strings.Contains(res.Body, `"weightKg":82.5`) || strings.Contains(res.Body, "secret_token") {
 		t.Fatalf("create %d %s", res.StatusCode, res.Body)
 	}
 }
@@ -234,6 +242,17 @@ func TestDayPlanContract(t *testing.T) {
 	res, _ = h.Handle(context.Background(), event)
 	if !strings.Contains(res.Body, `"memo":"脚"`) || !strings.Contains(res.Body, "レッグプレス") {
 		t.Fatalf("get after put %s", res.Body)
+	}
+
+	garbage := httpEvent("PUT", "/api/day-plan", "$default", "", body+` true`, false)
+	garbage.RequestContext.Authorizer = jwtAuth(userID)
+	res, _ = h.Handle(context.Background(), garbage)
+	if res.StatusCode != 400 || !strings.Contains(res.Body, `"error":"invalid_json"`) {
+		t.Fatalf("trailing day plan %d %s", res.StatusCode, res.Body)
+	}
+	res, _ = h.Handle(context.Background(), event)
+	if !strings.Contains(res.Body, `"memo":"脚"`) {
+		t.Fatalf("trailing write landed %s", res.Body)
 	}
 
 	noUser := httpEvent("GET", "/api/day-plan", "$default", "date=2026-10-02", "", false)

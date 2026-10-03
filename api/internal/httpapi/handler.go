@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -404,6 +405,14 @@ func readEventJSON(event events.APIGatewayV2HTTPRequest) (any, error) {
 	decoder.UseNumber()
 	var value any
 	if err := decoder.Decode(&value); err != nil {
+		return nil, &syntax.Error{Err: err}
+	}
+	// JSON.parse rejects a second value. Decoder.Decode stops after the first.
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("unexpected trailing JSON")
+		}
 		return nil, &syntax.Error{Err: err}
 	}
 	return value, nil
