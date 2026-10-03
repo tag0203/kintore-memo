@@ -1,4 +1,5 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
+import { DAY_PLAN_EXERCISE_INVALID, DAY_PLAN_EXERCISE_TOO_LONG } from "./exerciseName";
 
 /** 画面のセッションのうち、DayPlan に載せる分。重量・回数・セット・きつさは含めない。 */
 export interface DayPlanInput {
@@ -39,8 +40,8 @@ const ERROR_TEXT: Record<string, string> = {
   date_window: "その日付のメニューは保存できません",
   memo_invalid: "部位メモを確認してください",
   memo_too_long: "部位メモが長すぎます",
-  exercise_invalid: "種目名を確認してください",
-  exercise_too_long: "種目名が長すぎます",
+  exercise_invalid: DAY_PLAN_EXERCISE_INVALID,
+  exercise_too_long: DAY_PLAN_EXERCISE_TOO_LONG,
   exercises_invalid: "種目の一覧を確認してください",
   exercises_too_many: DAY_PLAN_TOO_MANY_EXERCISES,
   duplicate_exercise: "同じ種目が重複しています",

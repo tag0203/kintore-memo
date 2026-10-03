@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DAY_PLAN_EXERCISE_LIMIT } from "./data/dayPlanClient";
+import { DAY_PLAN_EXERCISE_NAME_LIMIT } from "./data/exerciseName";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
 import { initialMenu, nextExerciseList } from "./session";
 
@@ -29,5 +30,16 @@ describe("nextExerciseList", () => {
     expect(blocked.result).toBe("too_many");
     expect(blocked.exercises).toEqual(current);
     expect(nextExerciseList(current, "種目41", null).result).toBe("added");
+  });
+
+  it("rejects names DayPlan cannot store before the menu changes", () => {
+    const current = ["スクワット"];
+    const hash = nextExerciseList(current, "スクワット#脚", null);
+    expect(hash).toEqual({ result: "invalid", exercises: current });
+    expect(nextExerciseList(current, "ベンチ\u0007プレス", DAY_PLAN_EXERCISE_LIMIT).result).toBe("invalid");
+    const longName = "あ".repeat(DAY_PLAN_EXERCISE_NAME_LIMIT + 1);
+    expect(nextExerciseList(current, longName, null)).toEqual({ result: "too_long", exercises: current });
+    expect(nextExerciseList(current, "スクワット＃", null).result).toBe("added");
+    expect(nextExerciseList(current, "あ".repeat(DAY_PLAN_EXERCISE_NAME_LIMIT), null).result).toBe("added");
   });
 });

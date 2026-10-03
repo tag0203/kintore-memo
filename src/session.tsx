@@ -1,13 +1,18 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { DAY_PLAN_EXERCISE_LIMIT, DAY_PLAN_TOO_MANY_EXERCISES, type DayPlanClient } from "./data/dayPlanClient";
+import {
+  DAY_PLAN_EXERCISE_INVALID,
+  DAY_PLAN_EXERCISE_TOO_LONG,
+  dayPlanExerciseNameIssue,
+} from "./data/exerciseName";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
 import { toISODate } from "./domain";
 
-export type AddExerciseResult = "added" | "present" | "empty" | "too_many";
+export type AddExerciseResult = "added" | "present" | "empty" | "too_many" | "invalid" | "too_long";
 
-/** `limit` が null のときはモック経路。永続化するときは DayPlan の 40 件で止める。 */
+/** `limit` が null のときはモック経路。永続化するときは DayPlan の 40 件で止める。名前の禁止文字はどちらも拒否する。 */
 export function nextExerciseList(
   exercises: readonly string[],
   name: string,
@@ -16,6 +21,8 @@ export function nextExerciseList(
   const trimmed = name.trim();
   if (!trimmed) return { result: "empty", exercises: [...exercises] };
   if (exercises.includes(trimmed)) return { result: "present", exercises: [...exercises] };
+  const issue = dayPlanExerciseNameIssue(trimmed);
+  if (issue) return { result: issue, exercises: [...exercises] };
   if (limit != null && exercises.length >= limit) return { result: "too_many", exercises: [...exercises] };
   return { result: "added", exercises: [...exercises, trimmed] };
 }
@@ -147,6 +154,14 @@ export function SessionProvider({
         const decision = nextExerciseList(exercises, name, saver ? DAY_PLAN_EXERCISE_LIMIT : null);
         if (decision.result === "too_many") {
           setSaveError(DAY_PLAN_TOO_MANY_EXERCISES);
+          return decision.result;
+        }
+        if (decision.result === "invalid") {
+          setSaveError(DAY_PLAN_EXERCISE_INVALID);
+          return decision.result;
+        }
+        if (decision.result === "too_long") {
+          setSaveError(DAY_PLAN_EXERCISE_TOO_LONG);
           return decision.result;
         }
         if (decision.result !== "added") return decision.result;
