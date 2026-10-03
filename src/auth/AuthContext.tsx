@@ -10,6 +10,7 @@ import {
 } from "react";
 import { completeNewPassword, refreshAuthTokens, signInWithPassword } from "./cognitoClient";
 import { readCognitoConfig, type CognitoConfig } from "./config";
+import { mayApplyRefreshedTokens } from "./sessionEpoch";
 import { runBeforeSignOut } from "./signOutSequence";
 import { clearStoredTokens, loadStoredTokens, saveStoredTokens } from "./tokenStore";
 import { displayEmailFromIdToken, isIdTokenFresh, type AuthTokens } from "./tokens";
@@ -41,6 +42,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [challenge, setChallenge] = useState<{ email: string; session: string } | null>(null);
   const beforeSignOutRef = useRef<Array<() => Promise<void>>>([]);
   const signingOutRef = useRef(false);
+  /** Bumped when logout clears tokens, so a late refresh cannot restore them. */
+  const sessionEpochRef = useRef(0);
 
   useEffect(() => {
     if (!config) {
@@ -99,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await runBeforeSignOut(beforeSignOutRef.current);
     } finally {
+      sessionEpochRef.current += 1;
       clearStoredTokens();
       setTokens(null);
       setChallenge(null);
@@ -111,11 +115,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!config) throw new Error("Cognito が設定されていません");
     if (!tokens) throw new Error("ログインしていません");
     if (isIdTokenFresh(tokens)) return tokens.idToken;
+    const epoch = sessionEpochRef.current;
     try {
       const next = await refreshAuthTokens(config, tokens.refreshToken);
+      if (!mayApplyRefreshedTokens(epoch, sessionEpochRef.current)) return next.idToken;
       applyTokens(next);
       return next.idToken;
-    } catch {
+    } catch (error) {
+      if (!mayApplyRefreshedTokens(epoch, sessionEpochRef.current)) {
+        throw error instanceof Error ? error : new Error("ログアウトしました");
+      }
       signOut();
       throw new Error("セッションの有効期限が切れました。再度ログインしてください");
     }
