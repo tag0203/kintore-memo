@@ -1,8 +1,24 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { DayPlanClient } from "./data/dayPlanClient";
+import { useAuth } from "./auth/AuthContext";
+import { DAY_PLAN_EXERCISE_LIMIT, DAY_PLAN_TOO_MANY_EXERCISES, type DayPlanClient } from "./data/dayPlanClient";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
 import { toISODate } from "./domain";
+
+export type AddExerciseResult = "added" | "present" | "empty" | "too_many";
+
+/** `limit` が null のときはモック経路。永続化するときは DayPlan の 40 件で止める。 */
+export function nextExerciseList(
+  exercises: readonly string[],
+  name: string,
+  limit: number | null,
+): { result: AddExerciseResult; exercises: string[] } {
+  const trimmed = name.trim();
+  if (!trimmed) return { result: "empty", exercises: [...exercises] };
+  if (exercises.includes(trimmed)) return { result: "present", exercises: [...exercises] };
+  if (limit != null && exercises.length >= limit) return { result: "too_many", exercises: [...exercises] };
+  return { result: "added", exercises: [...exercises, trimmed] };
+}
 
 interface Session {
   date: string;
@@ -12,7 +28,7 @@ interface Session {
   /** 永続化に失敗したときだけ入る。モック経路では null */
   saveError: string | null;
   setMemo: (memo: string) => void;
-  addExercise: (name: string) => void;
+  addExercise: (name: string) => AddExerciseResult;
   finish: () => void;
   resume: () => void;
 }
@@ -41,6 +57,7 @@ export function SessionProvider({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const { registerBeforeSignOut } = useAuth();
 
   const saver = useMemo(
     () => (dayPlan ? createDayPlanSaver((input) => dayPlan.save(input).then(() => undefined)) : null),
@@ -104,8 +121,14 @@ export function SessionProvider({
     return () => {
       window.removeEventListener("pagehide", flush);
       document.removeEventListener("visibilitychange", onVisibility);
+      saver.cancel();
     };
   }, [saver]);
+
+  useEffect(() => {
+    if (!saver) return;
+    return registerBeforeSignOut(() => saver.flush());
+  }, [registerBeforeSignOut, saver]);
 
   const value = useMemo<Session>(() => {
     const publish = (next: { memo: string; exercises: string[]; finished: boolean }, immediate: boolean) => {
@@ -121,11 +144,15 @@ export function SessionProvider({
       saveError,
       setMemo: (next) => setMemoState(next.replace(/[\r\n]/g, "")),
       addExercise: (name) => {
-        const trimmed = name.trim();
-        if (!trimmed || exercises.includes(trimmed)) return;
-        const next = [...exercises, trimmed];
-        setExercises(next);
-        publish({ memo, exercises: next, finished }, true);
+        const decision = nextExerciseList(exercises, name, saver ? DAY_PLAN_EXERCISE_LIMIT : null);
+        if (decision.result === "too_many") {
+          setSaveError(DAY_PLAN_TOO_MANY_EXERCISES);
+          return decision.result;
+        }
+        if (decision.result !== "added") return decision.result;
+        setExercises(decision.exercises);
+        publish({ memo, exercises: decision.exercises, finished }, true);
+        return decision.result;
       },
       finish: () => {
         setFinished(true);

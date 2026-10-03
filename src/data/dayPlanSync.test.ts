@@ -76,6 +76,20 @@ describe("createDayPlanSaver", () => {
     expect(save).toHaveBeenCalledWith(plan("b"));
   });
 
+  it("cancel drops a pending debounce without blocking a later edit", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.schedule(plan("脚"));
+    saver.cancel();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).not.toHaveBeenCalled();
+    saver.schedule(plan("胸"));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith(plan("胸"));
+  });
+
   it("reports a failed save and clears it after the next success", async () => {
     const errors: string[] = [];
     let saved = 0;

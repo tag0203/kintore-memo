@@ -90,6 +90,13 @@ export function createDayPlanSaver(
       }
     },
     flush,
+    /** Drop a debounce timer. Does not abort a save that flush() already started. */
+    cancel() {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
     setListeners(next: DayPlanSaverListeners) {
       listeners = next;
     },

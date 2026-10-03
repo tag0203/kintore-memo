@@ -17,6 +17,11 @@ export interface DayPlanClient {
   save(input: DayPlanInput): Promise<DayPlanSnapshot>;
 }
 
+/** backend/dynamodb.mjs の LIMITS.exerciseCount と同じ。41 件目は画面に足さない。 */
+export const DAY_PLAN_EXERCISE_LIMIT = 40;
+
+export const DAY_PLAN_TOO_MANY_EXERCISES = "種目が多すぎます";
+
 export class DayPlanRequestError extends Error {
   readonly status: number;
   readonly code: string;
@@ -37,7 +42,7 @@ const ERROR_TEXT: Record<string, string> = {
   exercise_invalid: "種目名を確認してください",
   exercise_too_long: "種目名が長すぎます",
   exercises_invalid: "種目の一覧を確認してください",
-  exercises_too_many: "種目が多すぎます",
+  exercises_too_many: DAY_PLAN_TOO_MANY_EXERCISES,
   duplicate_exercise: "同じ種目が重複しています",
   finished_invalid: "終了状態を確認してください",
   body_invalid: "保存内容を確認してください",
