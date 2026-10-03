@@ -6,7 +6,7 @@ interface ImportMetaEnv {
   readonly VITE_COGNITO_USER_POOL_ID?: string;
   /** App Client ID。秘密ではない */
   readonly VITE_COGNITO_CLIENT_ID?: string;
-  /** API Gateway のベース URL。HTTP クライアントが使う。秘密ではない */
+  /** API Gateway のベース URL。記録の HTTP クライアントと DayPlan が使う。秘密ではない */
   readonly VITE_API_BASE_URL?: string;
 }
 

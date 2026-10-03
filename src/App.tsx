@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { ClientProvider } from "./clientContext";
+import { createHttpDayPlanClient } from "./data/dayPlanClient";
 import { selectWorkoutClient } from "./data/selectClient";
 import { PickerScreen } from "./screens/PickerScreen";
 import { RecordScreen } from "./screens/RecordScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { TodayScreen } from "./screens/TodayScreen";
 import { parseHash, routeToHash, type Route } from "./route";
-import { SessionProvider } from "./session";
+import { SessionProvider, useSession } from "./session";
 
 function useRoute() {
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
@@ -41,6 +42,7 @@ function useRoute() {
 
 function Shell() {
   const { route, navigate, back } = useRoute();
+  const session = useSession();
 
   useEffect(() => {
     if (route.screen === "picker") document.title = "種目を追加 · 筋トレメモ";
@@ -50,6 +52,11 @@ function Shell() {
 
   return (
     <div className="app-shell">
+      {session.saveError && (
+        <p className="save-error" role="alert">
+          {session.saveError}
+        </p>
+      )}
       {route.screen === "today" && <TodayScreen navigate={navigate} />}
       {route.screen === "picker" && <PickerScreen navigate={navigate} back={back} />}
       {route.screen === "record" && (
@@ -72,6 +79,14 @@ function AppBody() {
       }),
     [auth.config?.apiBaseUrl, auth.status],
   );
+  const dayPlan = useMemo(() => {
+    const base = auth.config?.apiBaseUrl?.trim() ?? "";
+    if (auth.status !== "signedIn" || !base) return null;
+    return createHttpDayPlanClient({
+      apiBaseUrl: base,
+      getIdToken: () => getIdTokenRef.current(),
+    });
+  }, [auth.config?.apiBaseUrl, auth.status]);
 
   if (auth.status === "loading") {
     return (
@@ -89,7 +104,7 @@ function AppBody() {
 
   return (
     <ClientProvider client={client}>
-      <SessionProvider>
+      <SessionProvider dayPlan={dayPlan}>
         <Shell />
       </SessionProvider>
     </ClientProvider>

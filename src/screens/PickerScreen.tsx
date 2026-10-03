@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { BackIcon, ChevronRightIcon, DumbbellIcon, Icon, SearchIcon } from "../components/icons";
 import { useClient } from "../clientContext";
+import { DAY_PLAN_TOO_MANY_EXERCISES } from "../data/dayPlanClient";
+import {
+  DAY_PLAN_EXERCISE_INVALID,
+  DAY_PLAN_EXERCISE_TOO_LONG,
+  dayPlanExerciseNameIssue,
+} from "../data/exerciseName";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
@@ -37,9 +43,20 @@ export function PickerScreen({
     if (!trimmed || busy) return;
     setBusy(true);
     setError(null);
+    const issue = dayPlanExerciseNameIssue(trimmed);
+    if (issue) {
+      setError(issue === "too_long" ? DAY_PLAN_EXERCISE_TOO_LONG : DAY_PLAN_EXERCISE_INVALID);
+      setBusy(false);
+      return;
+    }
     try {
       await client.touchExercise(trimmed, new Date().toISOString());
-      session.addExercise(trimmed);
+      const added = session.addExercise(trimmed);
+      if (added === "too_many") {
+        setError(DAY_PLAN_TOO_MANY_EXERCISES);
+        setBusy(false);
+        return;
+      }
       navigate({ screen: "record", exercise: trimmed });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "追加できませんでした");

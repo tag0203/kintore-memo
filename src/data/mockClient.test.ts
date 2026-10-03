@@ -65,5 +65,11 @@ describe("mock workout client", () => {
     await expect(client.touchExercise("  ", "2026-09-26T09:00:00.000Z")).rejects.toThrow(
       "種目名を入力してください",
     );
+    await expect(client.touchExercise("スクワット#脚", "2026-09-26T09:00:00.000Z")).rejects.toThrow(
+      "種目名を確認してください",
+    );
+    await expect(client.touchExercise("ベンチ\u0007プレス", "2026-09-26T09:00:00.000Z")).rejects.toThrow(
+      "種目名を確認してください",
+    );
   });
 });

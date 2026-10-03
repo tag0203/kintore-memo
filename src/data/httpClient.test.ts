@@ -205,6 +205,9 @@ describe("http workout client", () => {
       await expect(workout.touchExercise("  ", "2026-10-02T08:00:00.000Z")).rejects.toThrow(
         "種目名を入力してください",
       );
+      await expect(workout.touchExercise("スクワット#脚", "2026-10-02T08:00:00.000Z")).rejects.toThrow(
+        "種目名を確認してください",
+      );
     } finally {
       vi.unstubAllGlobals();
     }
