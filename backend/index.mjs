@@ -1,6 +1,9 @@
 /**
- * Lambda entry for the Notion wrapper (issue #10).
- * NotionCache items are built by dynamodb.mjs (docs/dynamodb.md). DayPlan stays #6.
+ * Deprecated Node Lambda for the Notion wrapper (issue #10).
+ * Production is the Go handler in api/ (issue #23). SAM does not deploy this file.
+ * It remains so these contract tests keep running. New API changes belong in api/.
+ * NotionCache items are built by dynamodb.mjs (docs/dynamodb.md).
+ * DayPlan GET/PUT is implemented in the Go handler. This file does not serve it.
  *
  * Public:  GET /api/health
  * Auth:    API Gateway JWT authorizer on /api/{proxy+}. This function does not

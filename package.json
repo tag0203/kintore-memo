@@ -9,6 +9,7 @@
     "preview": "vite preview --host",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "test": "vitest run && node scripts/check-secrets.mjs",
+    "test:api": "go test -C api ./...",
     "check:secrets": "node scripts/check-secrets.mjs"
   },
   "dependencies": {

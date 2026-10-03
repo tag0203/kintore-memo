@@ -25,6 +25,7 @@ npm run dev
 | --- | --- |
 | `npm run dev` | 開発サーバ |
 | `npm test` | 単体テストと、フロントにシークレットが無いことの確認 |
+| `npm run test:api` | Go API（`api/`）の単体テスト。Go 1.22 が要る |
 | `npm run typecheck` | 画面・設定・Worker の型チェック |
 | `npm run build` | 静的ファイルを `dist/` へ出力（PWA のマニフェストと Service Worker を含む） |
 | `npm run preview` | ビルド結果を <http://localhost:4173> で確認 |
@@ -36,9 +37,11 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
 
 ## データの境界
 
-画面は `WorkoutLogClient` だけを見ます。本番の Notion アクセスは **API Gateway → Lambda（`backend/`）** だけで、ブラウザは Notion を直接呼びません。トークンは SSM SecureString です。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
+画面は `WorkoutLogClient` だけを見ます。本番の Notion アクセスは **API Gateway → Go Lambda（`api/`）** だけで、ブラウザは Notion を直接呼びません。トークンは SSM SecureString です。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
 
-`worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Lambda は `worker/` を import せず、同じ形を `backend/` に持っています。
+`worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Go Lambda は `worker/` を import しません。
+
+`backend/` は以前の Node Lambda です。**非推奨**で、SAM はデプロイしません。契約の単体テストを残すために置いてあります。API の変更は `api/` に入れ、Node 側へは戻しません。テストが Go に揃ったあとに `backend/` を消して構いません。
 
 ```text
 ブラウザ（React）
@@ -51,13 +54,16 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
 
 本番
   API Gateway（JWT Authorizer。Lambda はトークンを再検証しない）
-    └─ Lambda backend/
+    └─ Go Lambda api/（provided.al2023）
          ├─ SSM SecureString（トークンとデータベース ID。メモリに短時間キャッシュ）
          ├─ Notion API 2026-03-11
-         └─ 任意: DynamoDB NotionCache（300 秒。正データではない）
+         ├─ 任意: DynamoDB NotionCache（300 秒。正データではない）
+         └─ DayPlan の GET / PUT（画面の接続は #6。いま画面はメモリ）
 
 参考: Cloudflare Worker（デプロイしない）
   worker/notionClient.ts
+
+非推奨: Node Lambda backend/（デプロイしない。契約テスト用）
 ```
 
 Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` の `VITE_` は Cognito / API の公開設定だけです（秘密ではない）。Notion のキーには `VITE_` を付けません。
@@ -75,10 +81,12 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | GET | `/api/logs/today?exercise=&date=YYYY-MM-DD` | その日の最新 1 行 |
 | GET | `/api/bootstrap?date=YYYY-MM-DD&exercise=` | 種目・最近・指定種目の前回と当日を一括。`exercise` は繰り返せる。`exercises=a,b` も可 |
 | POST | `/api/logs` | 1 行追加。重量・回数・セット・きつさ・日付を検査してから Notion へ書く |
+| GET | `/api/day-plan?date=YYYY-MM-DD` | その日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
+| PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。画面はまだ呼ばない |
 
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 
-レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。`POST /api/logs` のあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、`backend/dynamodb.mjs` が組み立てます。
+レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。`POST /api/logs` のあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、Go の `api/internal/ddb` が組み立てます。
 
 画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）はセッション開始の `GET /api/bootstrap` と、保存の `POST /api/logs` だけを呼びます。種目一覧・前回・当日の個別 GET は使いません。保存に成功した行でローカルキャッシュを更新し、ホームの「記録済」と前回表示は再取得しません。
 
@@ -86,7 +94,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | --- | --- |
 | 種目・重量・回数・セット数・きつさ・日付・タイトル | Notion の1行。保存のたびに追加（上書きしない） |
 | 前回 | その種目で、今日より前の最新1行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | 本番は DynamoDB の DayPlan 1 項目（[docs/dynamodb.md](docs/dynamodb.md)、読み書きは [#6](https://github.com/tag0203/kintore-memo/issues/6)）。いま画面はブラウザのメモリ |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の DayPlan 1 項目。Go API は `GET` / `PUT /api/day-plan`（[docs/dynamodb.md](docs/dynamodb.md)）。画面の接続は [#6](https://github.com/tag0203/kintore-memo/issues/6)。いま画面はブラウザのメモリ |
 
 モックの「最近」は、ピッカーで選んだ順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
 
@@ -106,7 +114,7 @@ npx wrangler secret put NOTION_DATABASE_ID
 
 ## Notion の形
 
-データベースをインテグレーションに共有します。`backend/`（本番）と参考実装の `worker/` は、どちらも API `2026-03-11` でデータベースを開き、先頭のデータソースを使います。プロパティ名は次の通りです。括弧は全角です。
+データベースをインテグレーションに共有します。本番の `api/` と参考実装の `worker/` は、どちらも API `2026-03-11` でデータベースを開き、先頭のデータソースを使います。プロパティ名は次の通りです。括弧は全角です。
 
 | プロパティ | 型 | 内容 |
 | --- | --- | --- |
@@ -135,4 +143,4 @@ sam deploy
 
 Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
 
-DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。Lambda の Notion API は `backend/` です（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面の API クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。残るのは今日のメニューの永続化（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。
+DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です。画面の API クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。メニュー API は Go にあります。画面からの保存は [#6](https://github.com/tag0203/kintore-memo/issues/6) です。

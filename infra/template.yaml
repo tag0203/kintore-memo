@@ -3,8 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   kintore-memo — S3+CloudFront+OAC, HTTP API+Lambda, Cognito JWT Authorizer,
   DynamoDB On-Demand, SSM SecureString, CloudWatch Logs with retention.
-  Lambda is the Notion wrapper (#10). worker/ is not deployed.
-  Custom domain / ACM is #13. Screen client swap is #12.
+  The API Lambda is Go (api/, provided.al2023, #23). worker/ is not deployed.
+  The Node backend/ package is deprecated and is not deployed.
+  Custom domain / ACM is #13.
 
 Parameters:
   ProjectName:
@@ -24,7 +25,7 @@ Parameters:
 
 Globals:
   Function:
-    Runtime: nodejs22.x
+    Runtime: provided.al2023
     Architectures: [arm64]
     Timeout: 10
     MemorySize: 256
@@ -78,7 +79,8 @@ Resources:
 
   # ---------------------------------------------------------------------------
   # DynamoDB single table (issue #11). Entities: DayPlan, NotionCache.
-  # pk/sk + ttl. No GSI. Key shapes: docs/dynamodb.md, backend/dynamodb.mjs.
+  # pk/sk + ttl. No GSI. Key shapes: docs/dynamodb.md.
+  # Go items: api/internal/ddb. Deprecated Node reference: backend/dynamodb.mjs.
   # ---------------------------------------------------------------------------
   AppTable:
     Type: AWS::DynamoDB::Table
@@ -137,6 +139,7 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
           - OPTIONS
         MaxAge: 600
         AllowCredentials: false
@@ -205,13 +208,16 @@ Resources:
   ApiFunction:
     Type: AWS::Serverless::Function
     DependsOn: ApiFunctionLogGroup
+    Metadata:
+      BuildMethod: go1.x
     Properties:
       FunctionName: !Sub ${ProjectName}-${Environment}-api
-      CodeUri: ../backend/
-      Handler: index.handler
+      CodeUri: ../api/
+      Handler: bootstrap
+      Runtime: provided.al2023
       Role: !GetAtt ApiFunctionRole.Arn
       Timeout: 20
-      Description: Notion wrapper API (#10). JWT auth stays on the HTTP API authorizer.
+      Description: Go API (#23). JWT auth stays on the HTTP API authorizer.
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable
