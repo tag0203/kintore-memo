@@ -80,11 +80,13 @@ describe("Notion client", () => {
   it("reads the previous row and posts one new page", async () => {
     const record = { auth: "", createBody: "" };
     const client = createNotionClient(env, fakeFetch(record));
-    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject({
-      weightKg: 80,
-      difficulty: 3,
-      date: "2026-09-25",
-    });
+    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject([
+      {
+        weightKg: 80,
+        difficulty: 3,
+        date: "2026-09-25",
+      },
+    ]);
     expect(record.auth).toBe("Bearer test-token");
 
     await client.createLog({

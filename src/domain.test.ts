@@ -4,6 +4,7 @@ import {
   difficultyFromLabel,
   formatJapaneseDate,
   formatMonthDay,
+  formatLogLine,
   formatSetSummary,
   parseCount,
   parseWeight,
@@ -39,5 +40,6 @@ describe("dates and labels", () => {
   it("summarizes a previous set", () => {
     expect(formatSetSummary({ weightKg: 80, reps: 11, sets: 3 })).toBe("80kg × 11 × 3");
     expect(formatSetSummary({ weightKg: 82.5, reps: 8, sets: 3 })).toBe("82.5kg × 8 × 3");
+    expect(formatLogLine({ weightKg: 70, reps: 6, sets: 3, difficulty: 4 })).toBe("70kg × 6 × 3 · きつい");
   });
 });

@@ -26,7 +26,7 @@ describe("selectWorkoutClient", () => {
         date: "2026-10-02",
         exercises: [{ name: "デッドリフト", lastPickedAt: null }],
         recent: [],
-        logs: { デッドリフト: { previous: null, today: null } },
+        logs: { デッドリフト: { previous: [], today: [] } },
       }),
     );
     vi.stubGlobal("fetch", fetchMock);

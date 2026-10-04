@@ -1,6 +1,7 @@
-import type { ExerciseSummary } from "../src/domain";
+import type { ExerciseLog, ExerciseSummary } from "../src/domain";
 import { PAGE_TITLE } from "../src/domain";
 import type { WorkoutLogClient } from "../src/data/client";
+import { chronological } from "../src/data/logRows";
 import type { NotionEnv } from "./env";
 import {
   NOTION_VERSION,
@@ -72,13 +73,26 @@ export function createNotionClient(env: NotionEnv, fetchImpl: typeof fetch = fet
     return cache;
   }
 
-  async function query(body: unknown): Promise<NotionPageLike[]> {
+  async function query(body: unknown): Promise<{ pages: NotionPageLike[]; hasMore: boolean; nextCursor: string }> {
     const source = await resolve();
     const result = (await notion(`/data_sources/${source.dataSourceId}/query`, {
       method: "POST",
       body,
-    })) as { results?: NotionPageLike[] };
-    return result.results ?? [];
+    })) as { results?: NotionPageLike[]; has_more?: boolean; next_cursor?: string };
+    return {
+      pages: result.results ?? [],
+      hasMore: Boolean(result.has_more),
+      nextCursor: result.next_cursor ?? "",
+    };
+  }
+
+  function logsOf(source: ResolvedSource, pages: NotionPageLike[]): ExerciseLog[] {
+    const logs: ExerciseLog[] = [];
+    for (const page of pages) {
+      const log = pageToLog(page, source.titleProperty);
+      if (log) logs.push(log);
+    }
+    return logs;
   }
 
   return {
@@ -89,7 +103,7 @@ export function createNotionClient(env: NotionEnv, fetchImpl: typeof fetch = fet
 
     async listRecentExercises() {
       const source = await resolve();
-      const pages = await query(buildRecentQuery());
+      const { pages } = await query(buildRecentQuery());
       const seen = new Set<string>();
       const recent: ExerciseSummary[] = [];
       for (const page of pages) {
@@ -103,22 +117,44 @@ export function createNotionClient(env: NotionEnv, fetchImpl: typeof fetch = fet
 
     async getPreviousLog(exercise, beforeDate) {
       const source = await resolve();
-      const pages = await query(buildPreviousQuery(exercise, beforeDate));
-      for (const page of pages) {
-        const log = pageToLog(page, source.titleProperty);
-        if (log) return log;
+      const rows: ExerciseLog[] = [];
+      let day = "";
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const body = {
+          ...buildPreviousQuery(exercise, beforeDate),
+          ...(cursor ? { start_cursor: cursor } : {}),
+        };
+        const result = await query(body);
+        const logs = logsOf(source, result.pages);
+        if (logs.length === 0) break;
+        if (!day) day = logs.reduce((max, log) => (log.date > max ? log.date : max), logs[0].date);
+        let older = false;
+        for (const log of logs) {
+          if (log.date === day) rows.push(log);
+          else if (log.date < day) older = true;
+        }
+        if (older || !result.hasMore || !result.nextCursor || result.nextCursor === cursor) break;
+        cursor = result.nextCursor;
       }
-      return null;
+      return chronological(rows);
     },
 
     async getLogOnDate(exercise, date) {
       const source = await resolve();
-      const pages = await query(buildOnDateQuery(exercise, date));
-      for (const page of pages) {
-        const log = pageToLog(page, source.titleProperty);
-        if (log) return log;
+      const rows: ExerciseLog[] = [];
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const body = {
+          ...buildOnDateQuery(exercise, date),
+          ...(cursor ? { start_cursor: cursor } : {}),
+        };
+        const result = await query(body);
+        rows.push(...logsOf(source, result.pages));
+        if (!result.hasMore || !result.nextCursor || result.nextCursor === cursor) break;
+        cursor = result.nextCursor;
       }
-      return null;
+      return chronological(rows);
     },
 
     async createLog(input) {

@@ -17,8 +17,8 @@ import (
 type Backend interface {
 	ListExercises(ctx context.Context) ([]model.ExerciseSummary, error)
 	LoadRecentWindow(ctx context.Context) (model.Window, error)
-	GetPreviousLog(ctx context.Context, exercise, before string) (*model.ExerciseLog, error)
-	GetLogOnDate(ctx context.Context, exercise, date string) (*model.ExerciseLog, error)
+	GetPreviousLog(ctx context.Context, exercise, before string) ([]model.ExerciseLog, error)
+	GetLogOnDate(ctx context.Context, exercise, date string) ([]model.ExerciseLog, error)
 	CreateLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error)
 }
 
@@ -187,14 +187,14 @@ func (c *Client) loadSchema(ctx context.Context) (schema, error) {
 	}, nil
 }
 
-func (c *Client) query(ctx context.Context, body map[string]any) (schema, []map[string]any, bool, error) {
+func (c *Client) query(ctx context.Context, body map[string]any) (schema, []map[string]any, bool, string, error) {
 	source, err := c.resolve(ctx)
 	if err != nil {
-		return schema{}, nil, false, err
+		return schema{}, nil, false, "", err
 	}
 	result, err := c.notion(ctx, "/data_sources/"+source.dataSourceID+"/query", http.MethodPost, body)
 	if err != nil {
-		return schema{}, nil, false, err
+		return schema{}, nil, false, "", err
 	}
 	pages := make([]map[string]any, 0)
 	if raw, ok := result["results"].([]any); ok {
@@ -205,7 +205,8 @@ func (c *Client) query(ctx context.Context, body map[string]any) (schema, []map[
 		}
 	}
 	hasMore, _ := result["has_more"].(bool)
-	return source, pages, hasMore, nil
+	next, _ := result["next_cursor"].(string)
+	return source, pages, hasMore, next, nil
 }
 
 func logsFrom(source schema, pages []map[string]any) []model.ExerciseLog {
@@ -235,7 +236,7 @@ func (c *Client) ListExercises(ctx context.Context) ([]model.ExerciseSummary, er
 // LoadRecentWindow is one query for the newest logs.
 // Complete is false when older pages exist, so a missing row is not "no history".
 func (c *Client) LoadRecentWindow(ctx context.Context) (model.Window, error) {
-	source, pages, hasMore, err := c.query(ctx, buildRecentQuery())
+	source, pages, hasMore, _, err := c.query(ctx, buildRecentQuery())
 	if err != nil {
 		return model.Window{}, err
 	}
@@ -245,32 +246,71 @@ func (c *Client) LoadRecentWindow(ctx context.Context) (model.Window, error) {
 	}, nil
 }
 
-// GetPreviousLog returns the newest row strictly before beforeDate.
-func (c *Client) GetPreviousLog(ctx context.Context, exercise, beforeDate string) (*model.ExerciseLog, error) {
-	source, pages, _, err := c.query(ctx, buildPreviousQuery(exercise, beforeDate))
-	if err != nil {
-		return nil, err
-	}
-	for _, page := range pages {
-		if log := PageToLog(page, source.titleProperty); log != nil {
-			return log, nil
+// GetPreviousLog returns every row from that exercise's latest day strictly before beforeDate.
+// A later page is read only while that day continues. Older days are not included.
+func (c *Client) GetPreviousLog(ctx context.Context, exercise, beforeDate string) ([]model.ExerciseLog, error) {
+	var rows []model.ExerciseLog
+	var day string
+	cursor := ""
+	for page := 0; page < maxDayPages; page++ {
+		body := buildPreviousQuery(exercise, beforeDate)
+		if cursor != "" {
+			body["start_cursor"] = cursor
 		}
+		source, pages, hasMore, next, err := c.query(ctx, body)
+		if err != nil {
+			return nil, err
+		}
+		logs := logsFrom(source, pages)
+		if len(logs) == 0 {
+			break
+		}
+		if day == "" {
+			day = logs[0].Date
+			for _, log := range logs[1:] {
+				if log.Date > day {
+					day = log.Date
+				}
+			}
+		}
+		older := false
+		for _, log := range logs {
+			if log.Date == day {
+				rows = append(rows, log)
+				continue
+			}
+			if log.Date < day {
+				older = true
+			}
+		}
+		if older || !hasMore || next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
-	return nil, nil
+	return chronological(rows), nil
 }
 
-// GetLogOnDate returns the newest row on date.
-func (c *Client) GetLogOnDate(ctx context.Context, exercise, date string) (*model.ExerciseLog, error) {
-	source, pages, _, err := c.query(ctx, buildOnDateQuery(exercise, date))
-	if err != nil {
-		return nil, err
-	}
-	for _, page := range pages {
-		if log := PageToLog(page, source.titleProperty); log != nil {
-			return log, nil
+// GetLogOnDate returns every row of that exercise on date.
+func (c *Client) GetLogOnDate(ctx context.Context, exercise, date string) ([]model.ExerciseLog, error) {
+	var rows []model.ExerciseLog
+	cursor := ""
+	for page := 0; page < maxDayPages; page++ {
+		body := buildOnDateQuery(exercise, date)
+		if cursor != "" {
+			body["start_cursor"] = cursor
 		}
+		source, pages, hasMore, next, err := c.query(ctx, body)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, logsFrom(source, pages)...)
+		if !hasMore || next == "" || next == cursor {
+			break
+		}
+		cursor = next
 	}
-	return nil, nil
+	return chronological(rows), nil
 }
 
 // CreateLog appends one page and drops the schema cache so a new select option is visible.

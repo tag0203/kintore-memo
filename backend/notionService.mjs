@@ -27,15 +27,26 @@ export function summariesFromLogs(logs) {
   return recent;
 }
 
+function chronological(logs) {
+  return [...logs].sort((left, right) => {
+    if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
+    if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+    return 0;
+  });
+}
+
+function emptyRows() {
+  return [];
+}
+
 export function previousFromWindow(logs, exercise, before) {
-  let best = null;
+  let day = "";
   for (const log of logs) {
     if (log.exercise !== exercise || log.date >= before) continue;
-    if (!best || log.date > best.date || (log.date === best.date && log.createdAt > best.createdAt)) {
-      best = log;
-    }
+    if (!day || log.date > day) day = log.date;
   }
-  return best;
+  if (!day) return emptyRows();
+  return chronological(logs.filter((log) => log.exercise === exercise && log.date === day));
 }
 
 function oldestDate(logs) {
@@ -47,28 +58,28 @@ function oldestDate(logs) {
 }
 
 export function todayFromWindow(logs, exercise, date) {
-  let best = null;
-  for (const log of logs) {
-    if (log.exercise !== exercise || log.date !== date) continue;
-    if (!best || log.createdAt > best.createdAt) best = log;
-  }
-  return best;
+  return chronological(logs.filter((log) => log.exercise === exercise && log.date === date));
 }
 
-/** `{ known: true, log }` when the window can prove the answer, including an empty one. */
+/** `{ known: true, logs }` when the window can prove the answer, including an empty one. */
 export function previousInWindow(window, exercise, before) {
-  const log = previousFromWindow(window.logs, exercise, before);
-  if (log) return { known: true, log };
-  if (window.complete) return { known: true, log: null };
+  const logs = window.logs ?? [];
+  const rows = previousFromWindow(logs, exercise, before);
+  if (rows.length > 0) {
+    const day = rows[0].date;
+    const oldest = oldestDate(logs);
+    if (window.complete || (oldest && oldest < day)) return { known: true, logs: rows };
+    return { known: false };
+  }
+  if (window.complete) return { known: true, logs: emptyRows() };
   return { known: false };
 }
 
 export function todayInWindow(window, exercise, date) {
-  const log = todayFromWindow(window.logs, exercise, date);
-  if (log) return { known: true, log };
-  if (window.complete) return { known: true, log: null };
-  const oldest = oldestDate(window.logs);
-  if (oldest && date > oldest) return { known: true, log: null };
+  const logs = window.logs ?? [];
+  if (window.complete) return { known: true, logs: todayFromWindow(logs, exercise, date) };
+  const oldest = oldestDate(logs);
+  if (oldest && date > oldest) return { known: true, logs: todayFromWindow(logs, exercise, date) };
   return { known: false };
 }
 
@@ -134,15 +145,19 @@ export function createNotionService(deps) {
   async function getPreviousLog(exercise, before) {
     const window = await recentWindow();
     const resolved = previousInWindow(window, exercise, before);
-    if (resolved.known) return resolved.log;
-    return cache.getOrLoad(["logs", "previous", exercise, before], () => client.getPreviousLog(exercise, before));
+    if (resolved.known) return resolved.logs;
+    const rows = await cache.getOrLoad(["logs", "previous-rows", exercise, before], () =>
+      client.getPreviousLog(exercise, before),
+    );
+    return chronological(rows ?? []);
   }
 
   async function getLogOnDate(exercise, date) {
     const window = await recentWindow();
     const resolved = todayInWindow(window, exercise, date);
-    if (resolved.known) return resolved.log;
-    return cache.getOrLoad(["logs", "today", exercise, date], () => client.getLogOnDate(exercise, date));
+    if (resolved.known) return resolved.logs;
+    const rows = await cache.getOrLoad(["logs", "today-rows", exercise, date], () => client.getLogOnDate(exercise, date));
+    return chronological(rows ?? []);
   }
 
   async function bootstrap(date, exercises) {
@@ -155,11 +170,16 @@ export function createNotionService(deps) {
       const today = todayInWindow(window, name, date);
       logs[name] = {
         previous: previous.known
-          ? previous.log
-          : await cache.getOrLoad(["logs", "previous", name, date], () => client.getPreviousLog(name, date)),
+          ? previous.logs
+          : chronological(
+              (await cache.getOrLoad(["logs", "previous-rows", name, date], () => client.getPreviousLog(name, date))) ??
+                [],
+            ),
         today: today.known
-          ? today.log
-          : await cache.getOrLoad(["logs", "today", name, date], () => client.getLogOnDate(name, date)),
+          ? today.logs
+          : chronological(
+              (await cache.getOrLoad(["logs", "today-rows", name, date], () => client.getLogOnDate(name, date))) ?? [],
+            ),
       };
     }
     return {
@@ -174,8 +194,8 @@ export function createNotionService(deps) {
     const log = await client.createLog(input);
     await cache.delete(["exercises"]);
     await cache.delete(["exercises", "recent"]);
-    await cache.delete(["logs", "today", input.exercise, input.date]);
-    const previousPrefix = `logs#previous#${input.exercise}#`;
+    await cache.delete(["logs", "today-rows", input.exercise, input.date]);
+    const previousPrefix = `logs#previous-rows#${input.exercise}#`;
     await cache.deleteWhere(
       (key) => key === "bootstrap" || key.startsWith("bootstrap#") || key.startsWith(previousPrefix),
     );

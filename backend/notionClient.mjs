@@ -76,7 +76,20 @@ export function createNotionClient(env, fetchImpl = fetch) {
       body,
     });
     const pages = Array.isArray(result.results) ? result.results : [];
-    return { source, pages, hasMore: Boolean(result.has_more) };
+    return {
+      source,
+      pages,
+      hasMore: Boolean(result.has_more),
+      nextCursor: typeof result.next_cursor === "string" ? result.next_cursor : "",
+    };
+  }
+
+  function chronological(logs) {
+    return [...logs].sort((left, right) => {
+      if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
+      if (left.id !== right.id) return left.id < right.id ? -1 : 1;
+      return 0;
+    });
   }
 
   function logsFrom(source, pages) {
@@ -119,21 +132,39 @@ export function createNotionClient(env, fetchImpl = fetch) {
     },
 
     async getPreviousLog(exercise, beforeDate) {
-      const { source, pages } = await query(buildPreviousQuery(exercise, beforeDate));
-      for (const page of pages) {
-        const log = pageToLog(page, source.titleProperty);
-        if (log) return log;
+      const rows = [];
+      let day = "";
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const body = buildPreviousQuery(exercise, beforeDate);
+        if (cursor) body.start_cursor = cursor;
+        const result = await query(body);
+        const logs = logsFrom(result.source, result.pages);
+        if (logs.length === 0) break;
+        if (!day) day = logs.reduce((max, log) => (log.date > max ? log.date : max), logs[0].date);
+        let older = false;
+        for (const log of logs) {
+          if (log.date === day) rows.push(log);
+          else if (log.date < day) older = true;
+        }
+        if (older || !result.hasMore || !result.nextCursor || result.nextCursor === cursor) break;
+        cursor = result.nextCursor;
       }
-      return null;
+      return chronological(rows);
     },
 
     async getLogOnDate(exercise, date) {
-      const { source, pages } = await query(buildOnDateQuery(exercise, date));
-      for (const page of pages) {
-        const log = pageToLog(page, source.titleProperty);
-        if (log) return log;
+      const rows = [];
+      let cursor = "";
+      for (let page = 0; page < 20; page += 1) {
+        const body = buildOnDateQuery(exercise, date);
+        if (cursor) body.start_cursor = cursor;
+        const result = await query(body);
+        rows.push(...logsFrom(result.source, result.pages));
+        if (!result.hasMore || !result.nextCursor || result.nextCursor === cursor) break;
+        cursor = result.nextCursor;
       }
-      return null;
+      return chronological(rows);
     },
 
     async createLog(input) {

@@ -2,6 +2,7 @@ import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
 import { isDifficulty, toISODate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
 import type { WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
+import { chronological } from "./logRows";
 
 /**
  * API Gateway 向けの WorkoutLogClient。
@@ -17,8 +18,8 @@ import { assertCatalogName } from "./exerciseName";
 const BOOTSTRAP_LIMIT = 40;
 
 interface LogPair {
-  previous: ExerciseLog | null;
-  today: ExerciseLog | null;
+  previous: ExerciseLog[];
+  today: ExerciseLog[];
 }
 
 interface SessionCache {
@@ -83,9 +84,10 @@ function parseLog(value: unknown): ExerciseLog {
   };
 }
 
-function parseLogOrNull(value: unknown): ExerciseLog | null {
-  if (value == null) return null;
-  return parseLog(value);
+function parseLogList(value: unknown): ExerciseLog[] {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error("記録の取得に失敗しました");
+  return chronological(value.map(parseLog));
 }
 
 function parseSummary(value: unknown): ExerciseSummary {
@@ -109,7 +111,7 @@ function parseBootstrap(payload: unknown): {
   const logs = new Map<string, LogPair>();
   for (const [name, pair] of Object.entries(payload.logs)) {
     if (!isRecord(pair)) throw new Error("記録の取得に失敗しました");
-    logs.set(name, { previous: parseLogOrNull(pair.previous), today: parseLogOrNull(pair.today) });
+    logs.set(name, { previous: parseLogList(pair.previous), today: parseLogList(pair.today) });
   }
   return {
     exercises: payload.exercises.map(parseSummary),
@@ -134,9 +136,11 @@ function mergeSummaries(exercises: ExerciseSummary[], recent: ExerciseSummary[])
   return [...byName.values()];
 }
 
-function copyLog(log: ExerciseLog | null): ExerciseLog | null {
-  return log ? { ...log } : null;
+function copyLogs(logs: readonly ExerciseLog[] | undefined): ExerciseLog[] {
+  return (logs ?? []).map((log) => ({ ...log }));
 }
+
+const emptyPair = (): LogPair => ({ previous: [], today: [] });
 
 export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): WorkoutLogClient {
   const apiBaseUrl = options.apiBaseUrl.trim().replace(/\/+$/, "");
@@ -180,7 +184,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     cache.exercises = mergeSummaries(parsed.exercises, parsed.recent);
     for (const [name, pair] of parsed.logs) cache.logs.set(name, pair);
     for (const name of names) {
-      if (!cache.logs.has(name)) cache.logs.set(name, { previous: null, today: null });
+      if (!cache.logs.has(name)) cache.logs.set(name, emptyPair());
     }
   }
 
@@ -258,11 +262,11 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
 
   function remember(log: ExerciseLog): void {
     if (!cache || cache.date !== log.date) return;
-    const current = cache.logs.get(log.exercise) ?? { previous: null, today: null };
-    const today = current.today;
-    const newer =
-      !today || log.createdAt > today.createdAt || (log.createdAt === today.createdAt && log.id >= today.id);
-    cache.logs.set(log.exercise, { previous: current.previous, today: newer ? log : today });
+    const current = cache.logs.get(log.exercise) ?? emptyPair();
+    const today = current.today.some((row) => row.id === log.id)
+      ? current.today
+      : chronological([...current.today, log]);
+    cache.logs.set(log.exercise, { previous: current.previous, today });
     upsertExercise(log.exercise, log.createdAt);
   }
 
@@ -290,12 +294,12 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
 
     async getPreviousLog(exercise, beforeDate) {
       await need(beforeDate, namesFor(beforeDate, exercise));
-      return copyLog(requireCache(beforeDate).logs.get(exercise)?.previous ?? null);
+      return copyLogs(requireCache(beforeDate).logs.get(exercise)?.previous);
     },
 
     async getLogOnDate(exercise, date) {
       await need(date, namesFor(date, exercise));
-      return copyLog(requireCache(date).logs.get(exercise)?.today ?? null);
+      return copyLogs(requireCache(date).logs.get(exercise)?.today);
     },
 
     async createLog(input: NewExerciseLog) {
@@ -315,7 +319,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
       const date = cache?.date ?? toISODate(now);
       await need(date, []);
       const current = requireCache(date);
-      if (!current.logs.has(exerciseName)) current.logs.set(exerciseName, { previous: null, today: null });
+      if (!current.logs.has(exerciseName)) current.logs.set(exerciseName, emptyPair());
       return upsertExercise(exerciseName, atISO);
     },
   };

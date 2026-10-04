@@ -122,7 +122,7 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 | データ | 正 | メモ |
 | --- | --- | --- |
 | 種目、重量、回数、セット数、きつさ、日付、タイトル | Notion | 保存のたびに 1 行追加する。上書きしない |
-| 前回 | Notion から導出 | その種目で、今日より前の最新 1 行 |
+| 前回 | Notion から導出 | その種目で、今日より前に記録がある最新の日の行をすべて |
 | 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | Go の `GET` / `PUT /api/day-plan`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。キーと TTL は [dynamodb.md](./dynamodb.md)。Cognito と API URL が無いローカルはブラウザのメモリ |
 | Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |
 
@@ -172,7 +172,7 @@ Go Lambda（`api/`）はこれを次の形で行う。画面（[#12](https://git
 
 - `GET /api/bootstrap?date=YYYY-MM-DD` が種目一覧、最近、指定種目（`exercise` の繰り返し、または `exercises=a,b`）の前回と当日を返す。`date` は画面のセッション日付で、サーバーの UTC 今日では上書きしない。
 - 種目一覧と「最近 100 件」のウィンドウを 300 秒共有する。2 回目の bootstrap は、ウィンドウで足りる限り Notion を呼ばない。
-- ウィンドウが履歴の途中で切れていて、前回が証明できない種目だけ 1 件問い合わせる。
+- ウィンドウが履歴の途中で切れていて、前回日の全行が証明できない種目だけ、その種目の前回日を問い合わせる。当日も、その日の途中で切れているときはその日の行をすべて取りにいく。
 - `POST /api/logs` の成功後に、種目一覧・最近ウィンドウ・その種目のキャッシュを捨てる。次の読みだけ Notion に戻る。
 - キャッシュ項目は [dynamodb.md](./dynamodb.md) の `NotionCache` で、`api/internal/ddb` が組み立てる（`pk=CACHE#notion`、`sk` は 1〜4 セグメント、TTL 300 秒）。DynamoDB の失敗時、または `NOTION_CACHE=memory` のときはプロセス内メモリだけ。失敗しても読み取りは Notion に進む。
 - トークンは `NOTION_TOKEN` / `NOTION_DATABASE_ID` が両方あるときそれを使い、無ければ SSM を `WithDecryption` で読む。同じ実行環境では数分間再利用する。レスポンスには出さない。

@@ -32,11 +32,11 @@ function fakeClient(options = {}) {
     },
     async getPreviousLog(exercise, before) {
       calls.push(`previous:${exercise}:${before}`);
-      return log({ id: "old", exercise, date: "2026-01-01" });
+      return [log({ id: "old", exercise, date: "2026-01-01" })];
     },
     async getLogOnDate(exercise, date) {
       calls.push(`today:${exercise}:${date}`);
-      return null;
+      return [];
     },
     async createLog(input) {
       calls.push("create");
@@ -49,14 +49,44 @@ function serviceFor(client) {
   return createNotionService({ client, cache: createMemoryNotionCache({ now: () => new Date("2026-10-02T00:00:00.000Z") }) });
 }
 
+describe("same-day rows", () => {
+  it("keeps every row of that exercise's previous day and today's saves", async () => {
+    const client = fakeClient({
+      window: {
+        complete: true,
+        logs: [
+          log({ id: "old", date: "2026-09-10", weightKg: 40, createdAt: "2026-09-10T09:00:00.000Z" }),
+          log({ id: "s60", date: "2026-09-25", weightKg: 60, createdAt: "2026-09-25T11:00:00.000Z" }),
+          log({ id: "s70", date: "2026-09-25", weightKg: 70, createdAt: "2026-09-25T12:00:00.000Z" }),
+          log({
+            id: "press",
+            exercise: "レッグプレス",
+            date: "2026-09-28",
+            weightKg: 150,
+            createdAt: "2026-09-28T10:00:00.000Z",
+          }),
+          log({ id: "t80", date: "2026-10-02", weightKg: 80, createdAt: "2026-10-02T08:00:00.000Z" }),
+          log({ id: "t90", date: "2026-10-02", weightKg: 90, createdAt: "2026-10-02T09:00:00.000Z" }),
+        ],
+      },
+    });
+    const body = await serviceFor(client).bootstrap("2026-10-02", ["スクワット", "レッグプレス"]);
+    expect(body.logs["スクワット"].previous.map((row) => row.weightKg)).toEqual([60, 70]);
+    expect(body.logs["スクワット"].today.map((row) => row.weightKg)).toEqual([80, 90]);
+    expect(body.logs["レッグプレス"].previous.map((row) => row.date)).toEqual(["2026-09-28"]);
+    expect(body.logs["レッグプレス"].today).toEqual([]);
+    expect(client.calls).not.toContain("previous:スクワット:2026-10-02");
+  });
+});
+
 describe("notion service cache", () => {
   it("loads the catalog and the recent window once for repeated bootstraps", async () => {
     const client = fakeClient();
     const service = serviceFor(client);
     const first = await service.bootstrap("2026-10-02", ["スクワット"]);
     const second = await service.bootstrap("2026-10-02", ["スクワット"]);
-    expect(first.logs["スクワット"].previous).toMatchObject({ date: "2026-09-25" });
-    expect(first.logs["スクワット"].today).toBeNull();
+    expect(first.logs["スクワット"].previous).toMatchObject([{ date: "2026-09-25" }]);
+    expect(first.logs["スクワット"].today).toEqual([]);
     expect(second).toEqual(first);
     expect(client.calls).toEqual(["exercises", "recent"]);
   });
@@ -89,8 +119,8 @@ describe("notion service cache", () => {
     });
     const service = serviceFor(client);
     const body = await service.bootstrap("2026-10-02", ["デッドリフト"]);
-    expect(body.logs["デッドリフト"].previous).toMatchObject({ exercise: "デッドリフト", date: "2026-01-01" });
-    expect(body.logs["デッドリフト"].today).toBeNull();
+    expect(body.logs["デッドリフト"].previous).toMatchObject([{ exercise: "デッドリフト", date: "2026-01-01" }]);
+    expect(body.logs["デッドリフト"].today).toEqual([]);
     expect(client.calls).toContain("previous:デッドリフト:2026-10-02");
     expect(client.calls).not.toContain("today:デッドリフト:2026-10-02");
 

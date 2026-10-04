@@ -16,6 +16,14 @@ function log(partial: Partial<ExerciseLog> & Pick<ExerciseLog, "id" | "exercise"
   };
 }
 
+const squatPreviousLight = log({
+  id: "squat-prev-light",
+  exercise: "スクワット",
+  weightKg: 60,
+  date: "2026-09-25",
+  createdAt: "2026-09-25T11:00:00.000Z",
+});
+
 const squatPrevious = log({
   id: "squat-prev",
   exercise: "スクワット",
@@ -42,6 +50,7 @@ interface Call {
 function installApi() {
   const calls: Call[] = [];
   let failBootstrap = 0;
+  let saved = 0;
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? "GET";
@@ -63,12 +72,12 @@ function installApi() {
         { name: "スクワット", lastPickedAt: null },
         { name: "ベンチプレス", lastPickedAt: null },
       ];
-      const known: Record<string, { previous: ExerciseLog | null; today: ExerciseLog | null }> = {
-        スクワット: { previous: squatPrevious, today: null },
-        ベンチプレス: { previous: benchPrevious, today: null },
+      const known: Record<string, { previous: ExerciseLog[]; today: ExerciseLog[] }> = {
+        スクワット: { previous: [squatPreviousLight, squatPrevious], today: [] },
+        ベンチプレス: { previous: [benchPrevious], today: [] },
       };
-      const logs: Record<string, { previous: ExerciseLog | null; today: ExerciseLog | null }> = {};
-      for (const name of names) logs[name] = known[name] ?? { previous: null, today: null };
+      const logs: Record<string, { previous: ExerciseLog[]; today: ExerciseLog[] }> = {};
+      for (const name of names) logs[name] = known[name] ?? { previous: [], today: [] };
       return Response.json({
         date: parsed.searchParams.get("date"),
         exercises: catalog,
@@ -78,9 +87,10 @@ function installApi() {
     }
     if (parsed.pathname.endsWith("/api/logs") && method === "POST") {
       const input = JSON.parse(body ?? "{}") as Partial<ExerciseLog>;
+      saved += 1;
       return Response.json(
         log({
-          id: "saved-1",
+          id: `saved-${saved}`,
           exercise: String(input.exercise),
           weightKg: Number(input.weightKg),
           reps: Number(input.reps),
@@ -88,7 +98,7 @@ function installApi() {
           difficulty: 4,
           date: String(input.date),
           title: "－",
-          createdAt: "2026-10-02T09:00:00.000Z",
+          createdAt: `2026-10-02T09:00:0${saved}.000Z`,
         }),
         { status: 201 },
       );
@@ -129,9 +139,12 @@ describe("http workout client", () => {
         workout.getLogOnDate("スクワット", date),
         workout.getPreviousLog("レッグプレス", date),
       ]);
-      expect(squatPreviousLog).toMatchObject({ weightKg: 80, date: "2026-09-25" });
-      expect(squatToday).toBeNull();
-      expect(pressPrevious).toBeNull();
+      expect(squatPreviousLog).toMatchObject([
+        { id: "squat-prev-light", weightKg: 60, date: "2026-09-25" },
+        { id: "squat-prev", weightKg: 80, date: "2026-09-25" },
+      ]);
+      expect(squatToday).toEqual([]);
+      expect(pressPrevious).toEqual([]);
 
       const bootstraps = api.calls.filter((call) => call.url.includes("/api/bootstrap"));
       expect(bootstraps.length).toBeGreaterThan(0);
@@ -149,7 +162,7 @@ describe("http workout client", () => {
       await workout.getLogOnDate("ベンチプレス", date);
       await workout.getPreviousLog("スクワット", date);
       expect(api.calls.length).toBe(afterBootstrap);
-      expect(await workout.getPreviousLog("ベンチプレス", date)).toMatchObject({ weightKg: 60 });
+      expect(await workout.getPreviousLog("ベンチプレス", date)).toMatchObject([{ weightKg: 60 }]);
       expect((await workout.listRecentExercises()).map((exercise) => exercise.name)).toEqual(["スクワット"]);
     } finally {
       vi.unstubAllGlobals();
@@ -178,13 +191,34 @@ describe("http workout client", () => {
       expect(api.calls[reads].authorization).toBe("Bearer id-token");
       expect(JSON.parse(api.calls[reads].body ?? "{}")).toMatchObject({ exercise: "スクワット", weightKg: 82.5 });
 
-      expect(await workout.getLogOnDate("スクワット", date)).toMatchObject({ id: "saved-1", weightKg: 82.5 });
-      expect(await workout.getPreviousLog("スクワット", date)).toMatchObject({ id: "squat-prev" });
+      expect(await workout.getLogOnDate("スクワット", date)).toMatchObject([{ id: "saved-1", weightKg: 82.5 }]);
+      expect(await workout.getPreviousLog("スクワット", date)).toMatchObject([
+        { id: "squat-prev-light", weightKg: 60 },
+        { id: "squat-prev", weightKg: 80 },
+      ]);
+      const second = await workout.createLog({
+        exercise: "スクワット",
+        weightKg: 90,
+        reps: 6,
+        sets: 3,
+        difficulty: 5,
+        date,
+        title: "－",
+      });
+      expect(second.id).toBe("saved-2");
+      expect(await workout.getLogOnDate("スクワット", date)).toMatchObject([
+        { id: "saved-1", weightKg: 82.5 },
+        { id: "saved-2", weightKg: 90 },
+      ]);
+      expect(await workout.getPreviousLog("スクワット", date)).toMatchObject([
+        { id: "squat-prev-light" },
+        { id: "squat-prev" },
+      ]);
       expect((await workout.listRecentExercises())[0]).toMatchObject({
         name: "スクワット",
-        lastPickedAt: "2026-10-02T09:00:00.000Z",
+        lastPickedAt: "2026-10-02T09:00:02.000Z",
       });
-      expect(api.calls.length).toBe(reads + 1);
+      expect(api.calls.length).toBe(reads + 2);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -198,8 +232,8 @@ describe("http workout client", () => {
       const afterStart = api.calls.length;
       await workout.touchExercise("ショルダープレス", "2026-10-02T08:00:00.000Z");
       expect((await workout.listExercises()).map((exercise) => exercise.name)).toContain("ショルダープレス");
-      expect(await workout.getPreviousLog("ショルダープレス", date)).toBeNull();
-      expect(await workout.getLogOnDate("ショルダープレス", date)).toBeNull();
+      expect(await workout.getPreviousLog("ショルダープレス", date)).toEqual([]);
+      expect(await workout.getLogOnDate("ショルダープレス", date)).toEqual([]);
       expect((await workout.listRecentExercises())[0]?.name).toBe("ショルダープレス");
       expect(api.calls.length).toBe(afterStart);
       await expect(workout.touchExercise("  ", "2026-10-02T08:00:00.000Z")).rejects.toThrow(
@@ -238,7 +272,10 @@ describe("http workout client", () => {
       const workout = client();
       api.failNextBootstrap();
       await expect(workout.getPreviousLog("スクワット", date)).rejects.toThrow("一時的に失敗しました");
-      await expect(workout.getPreviousLog("スクワット", date)).resolves.toMatchObject({ id: "squat-prev" });
+      await expect(workout.getPreviousLog("スクワット", date)).resolves.toMatchObject([
+        { id: "squat-prev-light" },
+        { id: "squat-prev" },
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }

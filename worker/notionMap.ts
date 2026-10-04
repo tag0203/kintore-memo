@@ -78,7 +78,7 @@ export function buildPreviousQuery(exercise: string, beforeDate: string) {
       { property: PROPERTIES.date, direction: "descending" },
       { timestamp: "created_time", direction: "descending" },
     ],
-    page_size: 1,
+    page_size: 100,
   };
 }
 
@@ -90,8 +90,8 @@ export function buildOnDateQuery(exercise: string, date: string) {
         { property: PROPERTIES.date, date: { equals: date } },
       ],
     },
-    sorts: [{ timestamp: "created_time", direction: "descending" }],
-    page_size: 1,
+    sorts: [{ timestamp: "created_time", direction: "ascending" }],
+    page_size: 100,
   };
 }
 

@@ -10,20 +10,11 @@ import {
 } from "../domain";
 import type { WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
+import { logsOnDate, previousDayLogs } from "./logRows";
 import type { MockSnapshot } from "./seed";
-
-function compareDesc(left: ExerciseLog, right: ExerciseLog): number {
-  if (left.date !== right.date) return left.date < right.date ? 1 : -1;
-  if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? 1 : -1;
-  return left.id < right.id ? 1 : -1;
-}
 
 export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
   const state: MockSnapshot = structuredClone(snapshot);
-
-  function latest(matches: ExerciseLog[]): ExerciseLog | null {
-    return matches.sort(compareDesc)[0] ?? null;
-  }
 
   return {
     async listExercises() {
@@ -39,13 +30,11 @@ export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
     },
 
     async getPreviousLog(exercise, beforeDate) {
-      return latest(
-        state.logs.filter((log) => log.exercise === exercise && log.date < beforeDate),
-      );
+      return previousDayLogs(state.logs, exercise, beforeDate).map((log) => ({ ...log }));
     },
 
     async getLogOnDate(exercise, date) {
-      return latest(state.logs.filter((log) => log.exercise === exercise && log.date === date));
+      return logsOnDate(state.logs, exercise, date).map((log) => ({ ...log }));
     },
 
     async createLog(input: NewExerciseLog) {

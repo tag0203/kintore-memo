@@ -51,10 +51,10 @@ function app(client, env = {}) {
         return { logs: [squat], complete: true };
       },
       async getPreviousLog() {
-        return null;
+        return [];
       },
       async getLogOnDate() {
-        return null;
+        return [];
       },
       async createLog(input) {
         created += 1;
@@ -160,8 +160,8 @@ describe("isHealthGet / handler", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).logs["スクワット"]).toMatchObject({
-      previous: { weightKg: 80, date: "2026-09-25" },
-      today: null,
+      previous: [{ weightKg: 80, date: "2026-09-25" }],
+      today: [],
     });
   });
 
@@ -175,10 +175,10 @@ describe("isHealthGet / handler", () => {
         return { logs: [], complete: true };
       },
       async getPreviousLog() {
-        return null;
+        return [];
       },
       async getLogOnDate() {
-        return null;
+        return [];
       },
       async createLog() {
         created += 1;

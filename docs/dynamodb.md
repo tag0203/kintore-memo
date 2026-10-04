@@ -49,8 +49,8 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | --- | --- |
 | 種目一覧 | `exercises` |
 | 最近使った種目の応答 | `exercises` / `recent` |
-| 前回 | `logs` / `previous` / `<種目名>` / `<before>` |
-| その日の記録 | `logs` / `today` / `<種目名>` / `<date>` |
+| 前回の全行 | `logs` / `previous-rows` / `<種目名>` / `<before>` |
+| その日の全行 | `logs` / `today-rows` / `<種目名>` / `<date>` |
 | bootstrap | `bootstrap` |
 
 ## DayPlan の属性
