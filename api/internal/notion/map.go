@@ -7,6 +7,8 @@ const (
 	version        = "2026-03-11"
 	pageTitle      = "－"
 	recentPageSize = 100
+	dayPageSize    = 100
+	maxDayPages    = 20
 )
 
 var difficultyLabels = map[int]string{
@@ -104,7 +106,7 @@ func buildPreviousQuery(exercise, beforeDate string) map[string]any {
 			map[string]any{"property": properties.Date, "direction": "descending"},
 			map[string]any{"timestamp": "created_time", "direction": "descending"},
 		},
-		"page_size": 1,
+		"page_size": dayPageSize,
 	}
 }
 
@@ -116,8 +118,8 @@ func buildOnDateQuery(exercise, date string) map[string]any {
 				map[string]any{"property": properties.Date, "date": map[string]any{"equals": date}},
 			},
 		},
-		"sorts":     []any{map[string]any{"timestamp": "created_time", "direction": "descending"}},
-		"page_size": 1,
+		"sorts":     []any{map[string]any{"timestamp": "created_time", "direction": "ascending"}},
+		"page_size": dayPageSize,
 	}
 }
 

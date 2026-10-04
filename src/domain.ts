@@ -84,6 +84,10 @@ export function formatSetSummary(log: Pick<ExerciseLog, "weightKg" | "reps" | "s
   return `${formatWeight(log.weightKg)}kg × ${log.reps} × ${log.sets}`;
 }
 
+export function formatLogLine(log: Pick<ExerciseLog, "weightKg" | "reps" | "sets" | "difficulty">): string {
+  return `${formatSetSummary(log)} · ${DIFFICULTY_LABELS[log.difficulty]}`;
+}
+
 /** 画面の重量入力と同じ。0 より大きく 999 以下、小数は2桁まで。 */
 export function isValidWeightKg(value: number): boolean {
   if (!Number.isFinite(value) || value <= 0 || value > 999) return false;

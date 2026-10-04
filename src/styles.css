@@ -120,7 +120,7 @@ button, input { appearance: none; }
 .exercise-card {
   width: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   text-align: left;
@@ -129,9 +129,29 @@ button, input { appearance: none; }
   border-radius: 14px;
   padding: 14px 14px;
 }
-.exercise-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.exercise-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .exercise-name { font-size: 17px; font-weight: 700; }
-.exercise-prev { color: var(--muted); font-size: 13px; }
+.exercise-prev, .exercise-today {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.log-kicker { font-size: 12px; font-weight: 700; }
+.log-line { color: var(--text); }
+.session-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.session-row {
+  display: grid;
+  grid-template-columns: 1.3fr 0.8fr 1fr auto;
+  gap: 6px;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 700;
+}
+.session-row small { font-size: 12px; font-weight: 600; color: var(--muted); }
+.prev-date { margin: 0 0 8px; color: var(--muted); font-size: 13px; }
+.today-saved { margin: 0 0 8px; }
 .badge {
   flex: none;
   border-radius: 999px;

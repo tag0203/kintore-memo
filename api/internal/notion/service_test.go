@@ -31,10 +31,11 @@ func logRow(overrides model.ExerciseLog) model.ExerciseLog {
 }
 
 type countingBackend struct {
-	mu     sync.Mutex
-	calls  []string
-	window model.Window
-	gate   chan struct{}
+	mu       sync.Mutex
+	calls    []string
+	window   model.Window
+	gate     chan struct{}
+	previous []model.ExerciseLog
 }
 
 func (b *countingBackend) ListExercises(context.Context) ([]model.ExerciseSummary, error) {
@@ -61,19 +62,23 @@ func (b *countingBackend) LoadRecentWindow(ctx context.Context) (model.Window, e
 	return b.window, nil
 }
 
-func (b *countingBackend) GetPreviousLog(_ context.Context, exercise, before string) (*model.ExerciseLog, error) {
+func (b *countingBackend) GetPreviousLog(_ context.Context, exercise, before string) ([]model.ExerciseLog, error) {
 	b.mu.Lock()
 	b.calls = append(b.calls, "previous:"+exercise+":"+before)
+	rows := b.previous
 	b.mu.Unlock()
+	if rows != nil {
+		return rows, nil
+	}
 	row := logRow(model.ExerciseLog{ID: "old", Exercise: exercise, Date: "2026-01-01"})
-	return &row, nil
+	return []model.ExerciseLog{row}, nil
 }
 
-func (b *countingBackend) GetLogOnDate(_ context.Context, exercise, date string) (*model.ExerciseLog, error) {
+func (b *countingBackend) GetLogOnDate(_ context.Context, exercise, date string) ([]model.ExerciseLog, error) {
 	b.mu.Lock()
 	b.calls = append(b.calls, "today:"+exercise+":"+date)
 	b.mu.Unlock()
-	return nil, nil
+	return []model.ExerciseLog{}, nil
 }
 
 func (b *countingBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
@@ -112,10 +117,11 @@ func TestBootstrapUsesTheWindowOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Logs["スクワット"].Previous == nil || first.Logs["スクワット"].Previous.Date != "2026-09-25" || first.Logs["スクワット"].Today != nil {
+	previous := first.Logs["スクワット"].Previous
+	if len(previous) != 1 || previous[0].Date != "2026-09-25" || len(first.Logs["スクワット"].Today) != 0 {
 		t.Fatalf("first = %#v", first.Logs["スクワット"])
 	}
-	if second.Logs["スクワット"].Previous.Date != first.Logs["スクワット"].Previous.Date {
+	if second.Logs["スクワット"].Previous[0].Date != previous[0].Date {
 		t.Fatal("second bootstrap diverged")
 	}
 	if got := join(backend.snapshot()); got != "exercises,recent" && got != "recent,exercises" {
@@ -130,7 +136,8 @@ func TestColdExerciseQueriesPreviousOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if body.Logs["デッドリフト"].Previous == nil || body.Logs["デッドリフト"].Previous.Date != "2026-01-01" || body.Logs["デッドリフト"].Today != nil {
+	previous := body.Logs["デッドリフト"].Previous
+	if len(previous) != 1 || previous[0].Date != "2026-01-01" || len(body.Logs["デッドリフト"].Today) != 0 {
 		t.Fatalf("pair = %#v", body.Logs["デッドリフト"])
 	}
 	calls := join(backend.snapshot())
@@ -197,6 +204,125 @@ func TestConcurrentBootstrapSharesTheWindow(t *testing.T) {
 	}
 	if recent != 1 {
 		t.Fatalf("recent calls = %d (%v)", recent, backend.snapshot())
+	}
+}
+
+func fullLog(id, exercise string, weight float64, reps, sets, difficulty int, date, createdAt string) model.ExerciseLog {
+	return model.ExerciseLog{
+		ID: id, Exercise: exercise, WeightKg: weight, Reps: reps, Sets: sets,
+		Difficulty: difficulty, Date: date, Title: "－", CreatedAt: createdAt,
+	}
+}
+
+func TestPreviousDayKeepsEveryRowAndIgnoresOtherExercises(t *testing.T) {
+	backend := &countingBackend{window: model.Window{Complete: true, Logs: []model.ExerciseLog{
+		fullLog("squat-old", "スクワット", 40, 12, 3, 2, "2026-09-10", "2026-09-10T09:00:00.000Z"),
+		fullLog("squat-60", "スクワット", 60, 8, 3, 3, "2026-09-25", "2026-09-25T11:00:00.000Z"),
+		fullLog("squat-70", "スクワット", 70, 6, 3, 4, "2026-09-25", "2026-09-25T12:00:00.000Z"),
+		fullLog("press", "レッグプレス", 150, 10, 3, 3, "2026-09-28", "2026-09-28T10:00:00.000Z"),
+		fullLog("today-80", "スクワット", 80, 8, 3, 3, "2026-10-02", "2026-10-02T08:00:00.000Z"),
+		fullLog("today-90", "スクワット", 90, 5, 3, 5, "2026-10-02", "2026-10-02T09:00:00.000Z"),
+	}}}
+	service := newService(backend)
+	body, err := service.Bootstrap(context.Background(), "2026-10-02", []string{"スクワット", "レッグプレス"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	squat := body.Logs["スクワット"]
+	if len(squat.Previous) != 2 || squat.Previous[0].WeightKg != 60 || squat.Previous[1].WeightKg != 70 || squat.Previous[0].Date != "2026-09-25" {
+		t.Fatalf("squat previous = %#v", squat.Previous)
+	}
+	if len(squat.Today) != 2 || squat.Today[0].WeightKg != 80 || squat.Today[1].WeightKg != 90 {
+		t.Fatalf("squat today = %#v", squat.Today)
+	}
+	press := body.Logs["レッグプレス"]
+	if len(press.Previous) != 1 || press.Previous[0].Date != "2026-09-28" || press.Previous[0].WeightKg != 150 || len(press.Today) != 0 {
+		t.Fatalf("press = %#v", press)
+	}
+	if has(join(backend.snapshot()), "previous:") || has(join(backend.snapshot()), "today:") {
+		t.Fatalf("window was complete, extra queries = %v", backend.snapshot())
+	}
+}
+
+func TestTruncatedPreviousDayAsksForEveryRow(t *testing.T) {
+	backend := &countingBackend{
+		window: model.Window{Complete: false, Logs: []model.ExerciseLog{
+			fullLog("squat-70", "スクワット", 70, 6, 3, 4, "2026-09-25", "2026-09-25T12:00:00.000Z"),
+		}},
+		previous: []model.ExerciseLog{
+			fullLog("squat-60", "スクワット", 60, 8, 3, 3, "2026-09-25", "2026-09-25T11:00:00.000Z"),
+			fullLog("squat-70", "スクワット", 70, 6, 3, 4, "2026-09-25", "2026-09-25T12:00:00.000Z"),
+		},
+	}
+	service := newService(backend)
+	rows, err := service.GetPreviousLog(context.Background(), "スクワット", "2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].WeightKg != 60 || rows[1].WeightKg != 70 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if !has(join(backend.snapshot()), "previous:スクワット:2026-10-02") {
+		t.Fatalf("calls = %v", backend.snapshot())
+	}
+}
+
+type appendingBackend struct {
+	logs []model.ExerciseLog
+}
+
+func (b *appendingBackend) ListExercises(context.Context) ([]model.ExerciseSummary, error) {
+	return []model.ExerciseSummary{{Name: "スクワット"}}, nil
+}
+
+func (b *appendingBackend) LoadRecentWindow(context.Context) (model.Window, error) {
+	return model.Window{Logs: append([]model.ExerciseLog(nil), b.logs...), Complete: true}, nil
+}
+
+func (b *appendingBackend) GetPreviousLog(context.Context, string, string) ([]model.ExerciseLog, error) {
+	return nil, nil
+}
+
+func (b *appendingBackend) GetLogOnDate(context.Context, string, string) ([]model.ExerciseLog, error) {
+	return nil, nil
+}
+
+func (b *appendingBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	row := fullLog("id-"+input.Date+"-"+itoa(len(b.logs)), input.Exercise, input.WeightKg, input.Reps, input.Sets, input.Difficulty, input.Date, "2026-10-02T09:00:0"+itoa(len(b.logs))+".000Z")
+	b.logs = append(b.logs, row)
+	return row, nil
+}
+
+func TestLaterSaveKeepsTheEarlierSameDayRow(t *testing.T) {
+	backend := &appendingBackend{logs: []model.ExerciseLog{
+		fullLog("squat-60", "スクワット", 60, 8, 3, 3, "2026-09-25", "2026-09-25T11:00:00.000Z"),
+		fullLog("squat-70", "スクワット", 70, 6, 3, 4, "2026-09-25", "2026-09-25T12:00:00.000Z"),
+	}}
+	clock := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	service := NewService(backend, cache.NewJSON(cache.NewMemory(func() time.Time { return clock }), func() time.Time { return clock }))
+	for _, weight := range []float64{80, 90} {
+		if _, err := service.CreateLog(context.Background(), model.NewExerciseLog{
+			Exercise: "スクワット", WeightKg: weight, Reps: 8, Sets: 3, Difficulty: 4, Date: "2026-10-02",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	today, err := service.GetLogOnDate(context.Background(), "スクワット", "2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(today) != 2 || today[0].WeightKg != 80 || today[1].WeightKg != 90 {
+		t.Fatalf("today = %#v", today)
+	}
+	previous, err := service.GetPreviousLog(context.Background(), "スクワット", "2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(previous) != 2 || previous[0].WeightKg != 60 || previous[1].WeightKg != 70 || previous[0].Date != "2026-09-25" {
+		t.Fatalf("previous = %#v", previous)
+	}
+	if len(backend.logs) != 4 {
+		t.Fatalf("stored = %#v", backend.logs)
 	}
 }
 

@@ -69,14 +69,14 @@ func (f *fakeBackend) LoadRecentWindow(context.Context) (model.Window, error) {
 	return f.window, nil
 }
 
-func (f *fakeBackend) GetPreviousLog(context.Context, string, string) (*model.ExerciseLog, error) {
+func (f *fakeBackend) GetPreviousLog(context.Context, string, string) ([]model.ExerciseLog, error) {
 	f.calls = append(f.calls, "previous")
-	return nil, nil
+	return []model.ExerciseLog{}, nil
 }
 
-func (f *fakeBackend) GetLogOnDate(context.Context, string, string) (*model.ExerciseLog, error) {
+func (f *fakeBackend) GetLogOnDate(context.Context, string, string) ([]model.ExerciseLog, error) {
 	f.calls = append(f.calls, "today")
-	return nil, nil
+	return []model.ExerciseLog{}, nil
 }
 
 func (f *fakeBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
@@ -163,7 +163,7 @@ func TestExercisesBootstrapAndLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	pair := boot.Logs["スクワット"]
-	if pair.Previous == nil || pair.Previous.WeightKg != 80 || pair.Previous.Date != "2026-09-25" || pair.Today != nil {
+	if len(pair.Previous) != 1 || pair.Previous[0].WeightKg != 80 || pair.Previous[0].Date != "2026-09-25" || len(pair.Today) != 0 {
 		t.Fatalf("logs = %#v", pair)
 	}
 	if strings.Contains(res.Body, "secret_token") {
@@ -171,7 +171,7 @@ func TestExercisesBootstrapAndLogs(t *testing.T) {
 	}
 
 	res, _ = h.Handle(context.Background(), httpEvent("GET", "/api/logs/today", "$default", "exercise=スクワット&date=2026-10-02", "", false))
-	if res.StatusCode != 200 || res.Body != "null" {
+	if res.StatusCode != 200 || res.Body != "[]" {
 		t.Fatalf("today %d %s", res.StatusCode, res.Body)
 	}
 	options, _ := h.Handle(context.Background(), httpEvent("OPTIONS", "/api/logs", "$default", "", "", false))

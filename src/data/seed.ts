@@ -58,10 +58,12 @@ export function createSeed(now = new Date()): MockSnapshot {
   ];
 
   const logs: ExerciseLog[] = [
-    makeLog("seed-squat", "スクワット", 80, 11, 3, 3, yesterday, at(yesterday, "12:10")),
+    makeLog("seed-squat-light", "スクワット", 60, 8, 3, 3, yesterday, at(yesterday, "12:00")),
+    makeLog("seed-squat", "スクワット", 80, 11, 3, 4, yesterday, at(yesterday, "12:10")),
     makeLog("seed-press", "レッグプレス", 150, 10, 3, 3, yesterday, at(yesterday, "11:10")),
     makeLog("seed-curl-old", "レッグカール", 40, 12, 3, 2, sixDaysAgo, at(sixDaysAgo, "09:10")),
     makeLog("seed-curl-today", "レッグカール", 40, 12, 3, 2, today, at(today, "08:10")),
+    makeLog("seed-curl-today-heavy", "レッグカール", 45, 10, 3, 3, today, at(today, "08:20")),
     makeLog("seed-bench", "ベンチプレス", 60, 8, 3, 4, threeDaysAgo, at(threeDaysAgo, "10:10")),
   ];
 

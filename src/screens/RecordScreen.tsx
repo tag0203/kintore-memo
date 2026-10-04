@@ -1,16 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DifficultyFaces, Stars } from "../components/Difficulty";
-import {
-  BackIcon,
-  CalendarIcon,
-  ChevronDownIcon,
-  DumbbellIcon,
-  Icon,
-  LayersIcon,
-  PencilIcon,
-  RepeatIcon,
-  SaveIcon,
-} from "../components/icons";
+import { DifficultyFaces } from "../components/Difficulty";
+import { BackIcon, ChevronDownIcon, Icon, PencilIcon, SaveIcon } from "../components/icons";
 import { Modal } from "../components/Modal";
 import { useClient } from "../clientContext";
 import {
@@ -75,14 +65,15 @@ export function RecordScreen({
 
   useEffect(() => {
     if (loaded.status !== "ready" || !loaded.data || draft) return;
-    const [previous, todayLog] = loaded.data;
-    const next = todayLog ? draftFromLog(todayLog) : previous ? draftFromLog(previous) : emptyDraft;
+    const [previous, todayLogs] = loaded.data;
+    const seed = todayLogs.at(-1) ?? previous.at(-1);
+    const next = seed ? draftFromLog(seed) : emptyDraft;
     setDraft(next);
     setBaseline(JSON.stringify(next));
   }, [loaded.status, loaded.data, draft]);
 
-  const previous = loaded.data?.[0] ?? null;
-  const todayLog = loaded.data?.[1] ?? null;
+  const previous = loaded.data?.[0] ?? [];
+  const todayLogs = loaded.data?.[1] ?? [];
   const dirty = draft != null && JSON.stringify(draft) !== baseline;
 
   function update(partial: Partial<Draft>) {
@@ -154,66 +145,54 @@ export function RecordScreen({
         <>
           <article className="previous-card">
             <h2 className="card-kicker">前回</h2>
-            {previous ? (
-              <>
-                <div className="stats">
-                  <div className="stat">
-                    <span className="stat-label">日付</span>
-                    <span className="stat-value">{formatMonthDay(previous.date)}</span>
-                    <span className="stat-icon">
-                      <Icon>
-                        <CalendarIcon />
-                      </Icon>
-                    </span>
-                  </div>
-                  <div className="stat">
-                    <span className="stat-label">重量</span>
-                    <span className="stat-value">
-                      {formatWeight(previous.weightKg)} <small>kg</small>
-                    </span>
-                    <span className="stat-icon">
-                      <Icon>
-                        <DumbbellIcon />
-                      </Icon>
-                    </span>
-                  </div>
-                  <div className="stat">
-                    <span className="stat-label">回数</span>
-                    <span className="stat-value">
-                      {previous.reps} <small>回</small>
-                    </span>
-                    <span className="stat-icon">
-                      <Icon>
-                        <RepeatIcon />
-                      </Icon>
-                    </span>
-                  </div>
-                  <div className="stat">
-                    <span className="stat-label">セット</span>
-                    <span className="stat-value">
-                      {previous.sets} <small>セット</small>
-                    </span>
-                    <span className="stat-icon">
-                      <Icon>
-                        <LayersIcon />
-                      </Icon>
-                    </span>
-                  </div>
-                </div>
-                <div className="prev-difficulty">
-                  <span>きつさ</span>
-                  <span className="difficulty-chip">{DIFFICULTY_LABELS[previous.difficulty]}</span>
-                  <Stars value={previous.difficulty} />
-                </div>
-              </>
-            ) : (
+            {previous.length === 0 ? (
               <p className="empty-inline">まだ記録がありません</p>
+            ) : (
+              <>
+                <p className="prev-date">{formatMonthDay(previous[0].date)}</p>
+                <ul className="session-rows">
+                  {previous.map((log) => (
+                    <li key={log.id} className="session-row">
+                      <span>
+                        {formatWeight(log.weightKg)} <small>kg</small>
+                      </span>
+                      <span>
+                        {log.reps} <small>回</small>
+                      </span>
+                      <span>
+                        {log.sets} <small>セット</small>
+                      </span>
+                      <span className="difficulty-chip">{DIFFICULTY_LABELS[log.difficulty]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
           </article>
 
           <form className="today-card" onSubmit={(event) => void onSave(event)}>
             <h2 className="card-kicker">今日</h2>
-            {todayLog && <p className="today-note">今日の記録があります。保存すると、もう1行追加されます。</p>}
+            {todayLogs.length > 0 && (
+              <>
+                <ul className="session-rows today-saved">
+                  {todayLogs.map((log) => (
+                    <li key={log.id} className="session-row">
+                      <span>
+                        {formatWeight(log.weightKg)} <small>kg</small>
+                      </span>
+                      <span>
+                        {log.reps} <small>回</small>
+                      </span>
+                      <span>
+                        {log.sets} <small>セット</small>
+                      </span>
+                      <span className="difficulty-chip">{DIFFICULTY_LABELS[log.difficulty]}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="today-note">今日の記録は残したまま、保存でもう1行追加します。</p>
+              </>
+            )}
             {draft && (
               <>
                 <div className="field-row">

@@ -2,15 +2,15 @@ import { useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
 import { useClient } from "../clientContext";
-import { formatJapaneseDate, formatSetSummary, type ExerciseLog } from "../domain";
+import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } from "../domain";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
 
 interface PlanRow {
   name: string;
-  previous: ExerciseLog | null;
-  recorded: boolean;
+  previous: ExerciseLog[];
+  today: ExerciseLog[];
 }
 
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
@@ -22,17 +22,17 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const loaded = useLoad(async () => {
     const rows: PlanRow[] = await Promise.all(
       session.exercises.map(async (name) => {
-        const [previous, todayLog] = await Promise.all([
+        const [previous, today] = await Promise.all([
           client.getPreviousLog(name, session.date),
           client.getLogOnDate(name, session.date),
         ]);
-        return { name, previous, recorded: todayLog != null };
+        return { name, previous, today };
       }),
     );
     return rows;
   }, [planKey, session.date, client]);
 
-  const recordedCount = loaded.data?.filter((row) => row.recorded).length ?? 0;
+  const recordedCount = loaded.data?.filter((row) => row.today.length > 0).length ?? 0;
 
   return (
     <section className="screen">
@@ -91,7 +91,8 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <ul className="plan">
           {session.exercises.map((name, index) => {
             const row = loaded.data?.find((item) => item.name === name);
-            const recorded = row?.recorded ?? false;
+            const previous = row?.previous ?? [];
+            const today = row?.today ?? [];
             return (
               <li key={name}>
                 <button
@@ -103,11 +104,32 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
                     <span className="exercise-name">
                       {index + 1}) {name}
                     </span>
-                    <span className="exercise-prev">
-                      {row?.previous ? `前回 ${formatSetSummary(row.previous)}` : "前回 記録なし"}
-                    </span>
+                    {previous.length === 0 ? (
+                      <span className="exercise-prev">前回 記録なし</span>
+                    ) : (
+                      <span className="exercise-prev">
+                        <span className="log-kicker">前回 {formatMonthDay(previous[0].date)}</span>
+                        {previous.map((log) => (
+                          <span key={log.id} className="log-line">
+                            {formatLogLine(log)}
+                          </span>
+                        ))}
+                      </span>
+                    )}
+                    {today.length > 0 && (
+                      <span className="exercise-today">
+                        <span className="log-kicker">今日</span>
+                        {today.map((log) => (
+                          <span key={log.id} className="log-line">
+                            {formatLogLine(log)}
+                          </span>
+                        ))}
+                      </span>
+                    )}
                   </span>
-                  <span className={recorded ? "badge is-done" : "badge"}>{recorded ? "記録済" : "未"}</span>
+                  <span className={today.length > 0 ? "badge is-done" : "badge"}>
+                    {today.length > 0 ? `${today.length}件` : "未"}
+                  </span>
                 </button>
               </li>
             );

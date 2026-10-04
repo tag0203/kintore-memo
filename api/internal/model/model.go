@@ -31,10 +31,11 @@ type ExerciseSummary struct {
 	LastPickedAt *string `json:"lastPickedAt"`
 }
 
-// LogPair is the previous and same-day row for one exercise.
+// LogPair is every previous-day row and every same-day row for one exercise.
+// Both slices are empty, not null, when that side has no rows.
 type LogPair struct {
-	Previous *ExerciseLog `json:"previous"`
-	Today    *ExerciseLog `json:"today"`
+	Previous []ExerciseLog `json:"previous"`
+	Today    []ExerciseLog `json:"today"`
 }
 
 // Bootstrap is GET /api/bootstrap.

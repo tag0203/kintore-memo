@@ -55,34 +55,42 @@ func (s *Service) ListRecentExercises(ctx context.Context) ([]model.ExerciseSumm
 	return summariesFromLogs(window.Logs), nil
 }
 
-// GetPreviousLog uses the window when it can prove the answer.
-func (s *Service) GetPreviousLog(ctx context.Context, exercise, before string) (*model.ExerciseLog, error) {
+// GetPreviousLog uses the window when it contains that exercise's whole previous day.
+func (s *Service) GetPreviousLog(ctx context.Context, exercise, before string) ([]model.ExerciseLog, error) {
 	window, err := s.recentWindow(ctx)
 	if err != nil {
 		return nil, err
 	}
 	resolved := previousInWindow(window, exercise, before)
 	if resolved.known {
-		return resolved.log, nil
+		return resolved.logs, nil
 	}
-	return cache.GetOrLoad(ctx, s.json, []string{"logs", "previous", exercise, before}, func(ctx context.Context) (*model.ExerciseLog, error) {
+	logs, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "previous-rows", exercise, before}, func(ctx context.Context) ([]model.ExerciseLog, error) {
 		return s.client.GetPreviousLog(ctx, exercise, before)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return chronological(logs), nil
 }
 
-// GetLogOnDate uses the window when the session date is inside it.
-func (s *Service) GetLogOnDate(ctx context.Context, exercise, date string) (*model.ExerciseLog, error) {
+// GetLogOnDate uses the window when every row of that date is inside it.
+func (s *Service) GetLogOnDate(ctx context.Context, exercise, date string) ([]model.ExerciseLog, error) {
 	window, err := s.recentWindow(ctx)
 	if err != nil {
 		return nil, err
 	}
 	resolved := todayInWindow(window, exercise, date)
 	if resolved.known {
-		return resolved.log, nil
+		return resolved.logs, nil
 	}
-	return cache.GetOrLoad(ctx, s.json, []string{"logs", "today", exercise, date}, func(ctx context.Context) (*model.ExerciseLog, error) {
+	logs, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "today-rows", exercise, date}, func(ctx context.Context) ([]model.ExerciseLog, error) {
 		return s.client.GetLogOnDate(ctx, exercise, date)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return chronological(logs), nil
 }
 
 // Bootstrap returns the catalog, recent exercises, and previous/today for the session date.
@@ -124,28 +132,28 @@ func (s *Service) Bootstrap(ctx context.Context, date string, exercises []string
 	for _, name := range names {
 		previous := previousInWindow(window.window, name, date)
 		today := todayInWindow(window.window, name, date)
-		pair := model.LogPair{}
+		pair := model.LogPair{Previous: emptyLogs(), Today: emptyLogs()}
 		if previous.known {
-			pair.Previous = previous.log
+			pair.Previous = previous.logs
 		} else {
-			log, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "previous", name, date}, func(ctx context.Context) (*model.ExerciseLog, error) {
+			rows, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "previous-rows", name, date}, func(ctx context.Context) ([]model.ExerciseLog, error) {
 				return s.client.GetPreviousLog(ctx, name, date)
 			})
 			if err != nil {
 				return model.Bootstrap{}, err
 			}
-			pair.Previous = log
+			pair.Previous = chronological(rows)
 		}
 		if today.known {
-			pair.Today = today.log
+			pair.Today = today.logs
 		} else {
-			log, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "today", name, date}, func(ctx context.Context) (*model.ExerciseLog, error) {
+			rows, err := cache.GetOrLoad(ctx, s.json, []string{"logs", "today-rows", name, date}, func(ctx context.Context) ([]model.ExerciseLog, error) {
 				return s.client.GetLogOnDate(ctx, name, date)
 			})
 			if err != nil {
 				return model.Bootstrap{}, err
 			}
-			pair.Today = log
+			pair.Today = chronological(rows)
 		}
 		logs[name] = pair
 	}
@@ -174,10 +182,10 @@ func (s *Service) CreateLog(ctx context.Context, input model.NewExerciseLog) (mo
 	if err := s.json.Delete(ctx, []string{"exercises", "recent"}); err != nil {
 		return model.ExerciseLog{}, err
 	}
-	if err := s.json.Delete(ctx, []string{"logs", "today", input.Exercise, input.Date}); err != nil {
+	if err := s.json.Delete(ctx, []string{"logs", "today-rows", input.Exercise, input.Date}); err != nil {
 		return model.ExerciseLog{}, err
 	}
-	prefix := "logs#previous#" + input.Exercise + "#"
+	prefix := "logs#previous-rows#" + input.Exercise + "#"
 	if err := s.json.DeleteWhere(ctx, func(key string) bool {
 		return key == "bootstrap" || strings.HasPrefix(key, "bootstrap#") || strings.HasPrefix(key, prefix)
 	}); err != nil {
@@ -188,7 +196,7 @@ func (s *Service) CreateLog(ctx context.Context, input model.NewExerciseLog) (mo
 
 type resolved struct {
 	known bool
-	log   *model.ExerciseLog
+	logs  []model.ExerciseLog
 }
 
 func summariesFromLogs(logs []model.ExerciseLog) []model.ExerciseSummary {
@@ -220,42 +228,6 @@ func sortDesc(logs []model.ExerciseLog) []model.ExerciseLog {
 	return out
 }
 
-func previousFromWindow(logs []model.ExerciseLog, exercise, before string) *model.ExerciseLog {
-	var best *model.ExerciseLog
-	for i := range logs {
-		log := &logs[i]
-		if log.Exercise != exercise || log.Date >= before {
-			continue
-		}
-		if best == nil || log.Date > best.Date || (log.Date == best.Date && log.CreatedAt > best.CreatedAt) {
-			best = log
-		}
-	}
-	if best == nil {
-		return nil
-	}
-	copy := *best
-	return &copy
-}
-
-func todayFromWindow(logs []model.ExerciseLog, exercise, date string) *model.ExerciseLog {
-	var best *model.ExerciseLog
-	for i := range logs {
-		log := &logs[i]
-		if log.Exercise != exercise || log.Date != date {
-			continue
-		}
-		if best == nil || log.CreatedAt > best.CreatedAt {
-			best = log
-		}
-	}
-	if best == nil {
-		return nil
-	}
-	copy := *best
-	return &copy
-}
-
 func oldestDate(logs []model.ExerciseLog) string {
 	oldest := ""
 	for _, log := range logs {
@@ -266,25 +238,29 @@ func oldestDate(logs []model.ExerciseLog) string {
 	return oldest
 }
 
+// previousInWindow is known when the page contains that exercise's whole previous day.
+// A day that is cut off at the end of an incomplete page is not known.
 func previousInWindow(window model.Window, exercise, before string) resolved {
-	if log := previousFromWindow(window.Logs, exercise, before); log != nil {
-		return resolved{known: true, log: log}
+	day, rows := previousDayRows(window.Logs, exercise, before)
+	if day == "" {
+		if window.Complete {
+			return resolved{known: true, logs: emptyLogs()}
+		}
+		return resolved{}
 	}
-	if window.Complete {
-		return resolved{known: true}
+	if window.Complete || oldestDate(window.Logs) < day {
+		return resolved{known: true, logs: rows}
 	}
 	return resolved{}
 }
 
+// todayInWindow is known when the page extends before that date, or the history is complete.
 func todayInWindow(window model.Window, exercise, date string) resolved {
-	if log := todayFromWindow(window.Logs, exercise, date); log != nil {
-		return resolved{known: true, log: log}
-	}
 	if window.Complete {
-		return resolved{known: true}
+		return resolved{known: true, logs: sameDayRows(window.Logs, exercise, date)}
 	}
 	if oldest := oldestDate(window.Logs); oldest != "" && date > oldest {
-		return resolved{known: true}
+		return resolved{known: true, logs: sameDayRows(window.Logs, exercise, date)}
 	}
 	return resolved{}
 }

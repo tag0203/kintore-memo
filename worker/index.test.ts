@@ -11,10 +11,10 @@ function client(partial: Partial<WorkoutLogClient> = {}): WorkoutLogClient {
       return [];
     },
     async getPreviousLog() {
-      return null;
+      return [];
     },
     async getLogOnDate() {
-      return null;
+      return [];
     },
     async createLog(input) {
       return {

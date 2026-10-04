@@ -9,24 +9,18 @@ describe("mock workout client", () => {
   it("seeds the home list: previous day for squat, today already logged for leg curl", async () => {
     const client = createMockClient(createSeed(today));
 
-    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject({
-      weightKg: 80,
-      reps: 11,
-      sets: 3,
-      difficulty: 3,
-      date: "2026-09-25",
-    });
+    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject([
+      { id: "seed-squat-light", weightKg: 60, reps: 8, sets: 3, difficulty: 3, date: "2026-09-25" },
+      { id: "seed-squat", weightKg: 80, reps: 11, sets: 3, difficulty: 4, date: "2026-09-25" },
+    ]);
 
-    await expect(client.getLogOnDate("レッグカール", "2026-09-26")).resolves.toMatchObject({
-      id: "seed-curl-today",
-      weightKg: 40,
-      reps: 12,
-      sets: 3,
-    });
-    await expect(client.getPreviousLog("レッグカール", "2026-09-26")).resolves.toMatchObject({
-      weightKg: 40,
-      date: "2026-09-20",
-    });
+    await expect(client.getLogOnDate("レッグカール", "2026-09-26")).resolves.toMatchObject([
+      { id: "seed-curl-today", weightKg: 40, reps: 12, sets: 3 },
+      { id: "seed-curl-today-heavy", weightKg: 45, reps: 10, sets: 3 },
+    ]);
+    await expect(client.getPreviousLog("レッグカール", "2026-09-26")).resolves.toMatchObject([
+      { weightKg: 40, date: "2026-09-20" },
+    ]);
 
     const recent = await client.listRecentExercises();
     expect(recent.map((exercise) => exercise.name).slice(0, 3)).toEqual([
@@ -48,13 +42,21 @@ describe("mock workout client", () => {
     });
 
     expect(created.title).toBe(PAGE_TITLE);
-    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject({
-      weightKg: 80,
+    const heavier = await client.createLog({
+      exercise: "スクワット",
+      weightKg: 90,
+      reps: 6,
+      sets: 3,
+      difficulty: 5,
+      date: "2026-09-26",
     });
-    await expect(client.getLogOnDate("スクワット", "2026-09-26")).resolves.toMatchObject({
-      weightKg: 82.5,
-      difficulty: 4,
-    });
+    await expect(client.getPreviousLog("スクワット", "2026-09-26")).resolves.toMatchObject([
+      { id: "seed-squat-light", weightKg: 60 },
+      { id: "seed-squat", weightKg: 80 },
+    ]);
+    const todayLogs = await client.getLogOnDate("スクワット", "2026-09-26");
+    expect(todayLogs.map((log) => log.id)).toEqual([created.id, heavier.id]);
+    expect(todayLogs.map((log) => log.weightKg)).toEqual([82.5, 90]);
   });
 
   it("adds a new exercise name to the catalog", async () => {

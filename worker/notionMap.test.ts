@@ -43,7 +43,7 @@ describe("Notion payload mapping", () => {
     expect(() => assertWorkoutSchema({ 名前: { type: "title" } })).toThrow("プロパティ「種目」がありません");
   });
 
-  it("queries the latest row before today and creates one page per save", () => {
+  it("queries that exercise before today and creates one page per save", () => {
     expect(buildPreviousQuery("スクワット", "2026-09-26").filter.and[1]).toEqual({
       property: PROPERTIES.date,
       date: { before: "2026-09-26" },
