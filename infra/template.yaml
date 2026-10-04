@@ -137,6 +137,7 @@ Resources:
         AllowMethods:
           - GET
           - POST
+          - PUT
           - OPTIONS
         MaxAge: 600
         AllowCredentials: false
@@ -211,7 +212,7 @@ Resources:
       Handler: index.handler
       Role: !GetAtt ApiFunctionRole.Arn
       Timeout: 20
-      Description: Notion wrapper API (#10). JWT auth stays on the HTTP API authorizer.
+      Description: Notion wrapper (#10) and DayPlan read/write (#6). JWT auth stays on the HTTP API authorizer.
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable

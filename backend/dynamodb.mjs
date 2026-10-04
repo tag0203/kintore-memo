@@ -1,7 +1,7 @@
 /**
  * Single-table contract for kintore-memo (issue #11).
- * Pure helpers: no AWS SDK, no network. Handlers in #6 and #10 should build
- * items here so keys and TTL stay in one place.
+ * Pure helpers: no AWS SDK, no network. DayPlan HTTP (#6) and Notion cache (#10)
+ * build items here so keys and TTL stay in one place.
  *
  * See docs/dynamodb.md.
  */

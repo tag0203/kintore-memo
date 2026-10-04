@@ -71,7 +71,7 @@ npm run dev
 
 - 3 つの `VITE_COGNITO_*` が揃っているときだけログイン画面が出ます
 - 未設定のままだと従来どおりインメモリモックだけで動きます（トークン不要）
-- `VITE_API_BASE_URL` は HTTP クライアントのベース URL。無くてもログイン自体は動き、記録はモックのまま
+- `VITE_API_BASE_URL` は記録の HTTP クライアントと DayPlan のベース URL。無くてもログイン自体は動き、記録もメニューもモックのままです
 
 本番ビルド前にも同じ変数を渡します（値はビルド成果物に埋め込まれます。秘密ではない）。
 
@@ -82,7 +82,7 @@ npm run dev
 - トークンは `localStorage` の `kintore-memo.auth.v1` に保存。ログアウトで消す
 - 期限切れ近くでは RefreshToken で IdToken を取り直す
 
-`src/auth/authorizedFetch.ts` がその付与の薄いラッパです。`src/data/httpClient.ts` の `WorkoutLogClient` が、起動時の bootstrap と保存の POST でこれを使います（#12）。
+`src/auth/authorizedFetch.ts` がその付与の薄いラッパです。`src/data/httpClient.ts` の `WorkoutLogClient` が、起動時の bootstrap と保存の POST でこれを使います（#12）。DayPlan の読み書き（#6）もこれを使います。
 
 ## curl で JWT 付き API を試す
 
@@ -109,13 +109,19 @@ curl -sS -o /dev/null -w "%{http_code}\n" \
   -H "Authorization: Bearer ${ID_TOKEN}" \
   "${API_URL}/api/exercises"
 # 200（Notion が読める）/ 500（SSM 未設定）/ 502（Notion が拒否）。401 ではないことがポイント
+
+# 今日のメニュー。date は Asia/Tokyo の当日 ±1 日
+curl -sS \
+  -H "Authorization: Bearer ${ID_TOKEN}" \
+  "${API_URL}/api/day-plan?date=$(TZ=Asia/Tokyo date +%F)"
+# 200。項目が無ければ memo は空、exercises は []
 ```
 
-未認証が 401、認証後が 200 か 500 か 502 なら、JWT Authorizer は期待どおりです。Lambda に別の認証処理はありません。
+未認証が 401、認証後の記録 API が 200 か 500 か 502、DayPlan が 200 なら、JWT Authorizer は期待どおりです。Lambda に別の認証処理はありません。
 
 ## ローカル SPA × デプロイ済み API
 
-`infra/template.yaml` の CORS は CloudFront オリジンに加え `http://localhost:5173` と `http://localhost:4173` を許可しています。ローカルの SPA が `authorizedFetch` から実 API を叩くときに使います。
+`infra/template.yaml` の CORS は CloudFront オリジンに加え `http://localhost:5173` と `http://localhost:4173` を許可しています。ローカルの SPA が `authorizedFetch` から記録 API と DayPlan の `PUT` を叩くときに使います。
 
 `sam local` では Cognito Authorizer は効きません（[aws-deploy.md](./aws-deploy.md)）。
 

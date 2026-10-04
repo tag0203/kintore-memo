@@ -9,19 +9,13 @@ import {
   type NewExerciseLog,
 } from "../domain";
 import type { WorkoutLogClient } from "./client";
+import { assertCatalogName } from "./exerciseName";
 import type { MockSnapshot } from "./seed";
 
 function compareDesc(left: ExerciseLog, right: ExerciseLog): number {
   if (left.date !== right.date) return left.date < right.date ? 1 : -1;
   if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? 1 : -1;
   return left.id < right.id ? 1 : -1;
-}
-
-function assertName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("種目名を入力してください");
-  if (trimmed.length > 40) throw new Error("種目名は40文字以内にしてください");
-  return trimmed;
 }
 
 export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
@@ -55,7 +49,7 @@ export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
     },
 
     async createLog(input: NewExerciseLog) {
-      const exercise = assertName(input.exercise);
+      const exercise = assertCatalogName(input.exercise);
       if (!isISODate(input.date)) throw new Error("日付が不正です");
       if (!isValidWeightKg(input.weightKg)) throw new Error("重量を確認してください");
       if (!isValidCount(input.reps)) throw new Error("回数を確認してください");
@@ -80,7 +74,7 @@ export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
     },
 
     async touchExercise(name: string, atISO: string) {
-      const exerciseName = assertName(name);
+      const exerciseName = assertCatalogName(name);
       const existing = state.exercises.find((exercise) => exercise.name === exerciseName);
       if (existing) {
         existing.lastPickedAt = atISO;

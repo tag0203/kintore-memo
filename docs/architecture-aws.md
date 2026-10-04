@@ -102,7 +102,7 @@ SPA はリポジトリ直下のままです。`frontend/` への移動は必須�
 src/                    既存の SPA（auth/ に Cognito 自前フォーム #9）
 public/
 worker/                 参考実装。本番経路にしない
-backend/                Lambda Notion ラッパー（#10）。項目は dynamodb.mjs。worker/ は import しない
+backend/                Lambda（Notion #10 と DayPlan #6）。項目は dynamodb.mjs。worker/ は import しない
 infra/template.yaml     SAM（#8）
 infra/samconfig.toml
 infra/github-oidc.yaml  デプロイ用 IAM（bootstrap。Actions からは作らない）
@@ -122,7 +122,7 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 | --- | --- | --- |
 | 種目、重量、回数、セット数、きつさ、日付、タイトル | Notion | 保存のたびに 1 行追加する。上書きしない |
 | 前回 | Notion から導出 | その種目で、今日より前の最新 1 行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | [#6](https://github.com/tag0203/kintore-memo/issues/6)。キーと TTL は [dynamodb.md](./dynamodb.md)。いまはブラウザのメモリ |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | [#6](https://github.com/tag0203/kintore-memo/issues/6)。`GET` / `PUT /api/day-plan`。キーと TTL は [dynamodb.md](./dynamodb.md)。API 未設定のローカルはブラウザのメモリ |
 | Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |
 
 初期スコープに入れないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態。
@@ -186,7 +186,10 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - `POST /api/logs`
 - bootstrap の一括取得（推奨）
 
-Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+Lambda 側は [#10](https://github.com/tag0203/kintore-memo/issues/10) で `backend/` にあります。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。今日のメニューは Notion ではなく DynamoDB です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。
+
+- `GET /api/day-plan?date=YYYY-MM-DD`
+- `PUT /api/day-plan`（本文は `date` / `memo` / `exercises` / `finished`。ユーザー ID は JWT の `sub`）
 
 ## コスト
 
