@@ -1,0 +1,141 @@
+# CI always runs. It does not deploy and does not use AWS credentials.
+# Deploy is .github/workflows/deploy.yml (manual, OIDC, no-op until the role exists).
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: test, typecheck, build, secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: api/go.sum
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Test Go API
+        env:
+          GOTOOLCHAIN: local
+        run: go test -C api ./...
+
+      - name: Compile the Lambda binary for arm64
+        env:
+          GOTOOLCHAIN: local
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -C api -o /tmp/bootstrap .
+
+      - name: Build
+        run: npm run build
+
+      # npm test checks the tree before dist/ exists. Scan the build output too.
+      - name: Check secrets
+        run: npm run check:secrets
+
+  sam:
+    name: sam validate and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SAM_CLI_TELEMETRY: "0"
+      AWS_EC2_METADATA_DISABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Detect SAM template
+        id: sam
+        run: |
+          set -euo pipefail
+          if [ -f infra/template.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "infra/template.yaml is absent. Skipping SAM."
+          fi
+
+      - name: Setup Node.js
+        if: steps.sam.outputs.present == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Go
+        if: steps.sam.outputs.present == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: api/go.sum
+
+      - name: Setup SAM CLI
+        if: steps.sam.outputs.present == 'true'
+        uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: Install cfn-lint
+        if: steps.sam.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          if command -v pipx >/dev/null 2>&1; then
+            pipx install cfn-lint
+          else
+            python3 -m pip install --user cfn-lint
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Validate templates
+        if: steps.sam.outputs.present == 'true'
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          sam validate --lint --template template.yaml
+          if [ -f github-oidc.yaml ]; then
+            sam validate --lint --template github-oidc.yaml
+          fi
+
+      - name: Build API
+        if: steps.sam.outputs.present == 'true'
+        working-directory: infra
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          sam build --template template.yaml

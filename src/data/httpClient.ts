@@ -1,6 +1,7 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
 import { isDifficulty, toISODate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
 import type { WorkoutLogClient } from "./client";
+import { assertCatalogName } from "./exerciseName";
 
 /**
  * API Gateway 向けの WorkoutLogClient。
@@ -32,13 +33,6 @@ export interface HttpWorkoutClientOptions {
   getIdToken: () => Promise<string>;
   /** listExercises が日付より先に来たときのセッション日。画面は起動日を渡す。 */
   now?: Date;
-}
-
-function assertName(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) throw new Error("種目名を入力してください");
-  if (trimmed.length > 40) throw new Error("種目名は40文字以内にしてください");
-  return trimmed;
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {
@@ -317,7 +311,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     },
 
     async touchExercise(name, atISO) {
-      const exerciseName = assertName(name);
+      const exerciseName = assertCatalogName(name);
       const date = cache?.date ?? toISODate(now);
       await need(date, []);
       const current = requireCache(date);

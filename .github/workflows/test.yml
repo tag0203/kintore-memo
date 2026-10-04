@@ -1,4 +1,4 @@
-# Tests only. Deploy and OIDC stay in issue #14 so this file can sit beside that workflow.
+# Go and npm tests. CI and OIDC deploy live in ci.yml and deploy.yml.
 name: test
 
 on:

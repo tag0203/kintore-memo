@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。本番の Notion ラッパーは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です（[#10](https://github.com/tag0203/kintore-memo/issues/10) の実装）。画面クライアントは `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。本番の Notion ラッパーは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です（[#10](https://github.com/tag0203/kintore-memo/issues/10) の実装）。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。
 
 ## 目的
 
@@ -90,7 +90,7 @@ flowchart TB
 | CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
-| GitHub Actions + OIDC | デプロイ。長期のアクセスキーは置かない |
+| GitHub Actions + OIDC | CI は毎回。デプロイは OIDC の手動実行。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
@@ -103,14 +103,16 @@ src/                    既存の SPA（auth/ に Cognito 自前フォーム #9�
 public/
 api/                    本番 Lambda（Go、provided.al2023、#23）
 worker/                 参考実装。本番経路にしない
-backend/                非推奨の Node Lambda。SAM はデプロイしない
+backend/                非推奨の Node Lambda（Notion と DayPlan の契約テスト）。SAM はデプロイしない
 infra/template.yaml     SAM（#8）。API は Go
 infra/samconfig.toml
+infra/github-oidc.yaml  デプロイ用 IAM（bootstrap。Actions からは作らない）
 docs/architecture-aws.md
 docs/aws-deploy.md
 docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
-.github/workflows/      テスト。OIDC デプロイは #14
+docs/github-actions-oidc.md
+.github/workflows/      CI と、手動の OIDC デプロイ（#14）。Go のテストと sam build を含む
 ```
 
 ## Notion と DynamoDB
@@ -121,7 +123,7 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 | --- | --- | --- |
 | 種目、重量、回数、セット数、きつさ、日付、タイトル | Notion | 保存のたびに 1 行追加する。上書きしない |
 | 前回 | Notion から導出 | その種目で、今日より前の最新 1 行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | Go の `GET` / `PUT /api/day-plan`。キーと TTL は [dynamodb.md](./dynamodb.md)。画面の接続は [#6](https://github.com/tag0203/kintore-memo/issues/6)。いま画面はブラウザのメモリ |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | Go の `GET` / `PUT /api/day-plan`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。キーと TTL は [dynamodb.md](./dynamodb.md)。Cognito と API URL が無いローカルはブラウザのメモリ |
 | Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |
 
 初期スコープに入れないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態。
@@ -137,6 +139,7 @@ Notion の列名と型は README の「Notion の形」が正です。実デー�
 | Notion トークン、データベース ID | SSM Parameter Store の SecureString。読むのは Lambda だけ。名前と IAM は SAM。値は CLI で作成（CFN は SecureString 非対応） |
 | Cognito のクライアント ID、API のベース URL | ブラウザに出てよい。秘密ではない |
 | ローカルの控え | `.env`（gitignore 済み）。コミットしない |
+| Actions から AWS へのデプロイ | OIDC ロール ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に置く。アクセスキーは Secrets に置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 Lambda の IAM は、そのパラメータの `GetParameter` と、そのテーブル、自分のロググループに限定します。`npm run check:secrets` は、ブラウザ側と `dist/` に Notion のトークン類が無いことを確認するために残します。
 
@@ -185,7 +188,7 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - bootstrap の一括取得（推奨）
 - `GET /api/day-plan?date=YYYY-MM-DD` と `PUT /api/day-plan`（本文は `date` / `memo` / `exercises` / `finished`。ユーザー ID は JWT の `sub`）
 
-本番 Lambda は [#23](https://github.com/tag0203/kintore-memo/issues/23) の `api/` です。[#10](https://github.com/tag0203/kintore-memo/issues/10) の Node `backend/` は非推奨で、SAM はデプロイしません。画面は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）です。
+本番 Lambda は [#23](https://github.com/tag0203/kintore-memo/issues/23) の `api/` です。[#10](https://github.com/tag0203/kintore-memo/issues/10) の Node `backend/` は非推奨で、SAM はデプロイしません。同じ DayPlan 契約のテストは `backend/` に残しています。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。メニューは Notion ではなく DynamoDB です。
 
 ## コスト
 

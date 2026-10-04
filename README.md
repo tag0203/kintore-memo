@@ -31,7 +31,7 @@ npm run dev
 | `npm run preview` | ビルド結果を <http://localhost:4173> で確認 |
 | `npm run check:secrets` | ブラウザ側のソースと `dist/` に Notion のトークン類が無いことを確認 |
 
-Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記録は API Gateway 経由です。どちらかが無いときはモックで、再読み込みすると記録は初期データに戻ります。部位メモと「今日のメニュー」「終了」はどちらもメモリ上だけで、リロードで戻ります。
+Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記録は API Gateway 経由です。今日のメニュー・部位メモ・終了も `GET` / `PUT /api/day-plan` で DynamoDB に保存し、リロード後に復元します。保存先が無い初回は空のメニューです（シードの「脚」と 3 種目はモック用です）。どちらかが無いときはモックで、再読み込みすると記録もメニューも初期データに戻ります。
 
 初期データは起動日を基準にしています。スクワットとレッグプレスは昨日の記録、レッグカールは今日も記録済み、です。
 
@@ -41,7 +41,7 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
 
 `worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Go Lambda は `worker/` を import しません。
 
-`backend/` は以前の Node Lambda です。**非推奨**で、SAM はデプロイしません。契約の単体テストを残すために置いてあります。API の変更は `api/` に入れ、Node 側へは戻しません。テストが Go に揃ったあとに `backend/` を消して構いません。
+`backend/` は以前の Node Lambda です。**非推奨**で、SAM はデプロイしません。Notion と DayPlan の契約テストを残すために置いてあります。本番の変更は `api/` に入れます。
 
 ```text
 ブラウザ（React）
@@ -51,14 +51,19 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
     │    起動時 GET /api/bootstrap、保存時 POST /api/logs、遷移はキャッシュ
     └─ インメモリのモック（src/data/browserClient.ts）
          Cognito か API ベース URL が無いとき
+  今日のメニュー / 部位メモ / 終了
+    ├─ Cognito または API の URL が無い … ブラウザのメモリ（シード）
+    └─ ログイン済みかつ VITE_API_BASE_URL あり
+         └─ GET/PUT /api/day-plan → Lambda → DynamoDB DayPlan
 
 本番
   API Gateway（JWT Authorizer。Lambda はトークンを再検証しない）
     └─ Go Lambda api/（provided.al2023）
          ├─ SSM SecureString（トークンとデータベース ID。メモリに短時間キャッシュ）
          ├─ Notion API 2026-03-11
-         ├─ 任意: DynamoDB NotionCache（300 秒。正データではない）
-         └─ DayPlan の GET / PUT（画面の接続は #6。いま画面はメモリ）
+         └─ DynamoDB
+              ├─ DayPlan（今日のメニュー。GET / PUT /api/day-plan）
+              └─ 任意: NotionCache（300 秒。正データではない）
 
 参考: Cloudflare Worker（デプロイしない）
   worker/notionClient.ts
@@ -81,8 +86,8 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | GET | `/api/logs/today?exercise=&date=YYYY-MM-DD` | その日の最新 1 行 |
 | GET | `/api/bootstrap?date=YYYY-MM-DD&exercise=` | 種目・最近・指定種目の前回と当日を一括。`exercise` は繰り返せる。`exercises=a,b` も可 |
 | POST | `/api/logs` | 1 行追加。重量・回数・セット・きつさ・日付を検査してから Notion へ書く |
-| GET | `/api/day-plan?date=YYYY-MM-DD` | その日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
-| PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。画面はまだ呼ばない |
+| GET | `/api/day-plan?date=YYYY-MM-DD` | そのユーザーのその日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
+| PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。ログイン済みの画面が呼ぶ |
 
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 
@@ -94,7 +99,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | --- | --- |
 | 種目・重量・回数・セット数・きつさ・日付・タイトル | Notion の1行。保存のたびに追加（上書きしない） |
 | 前回 | その種目で、今日より前の最新1行 |
-| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の DayPlan 1 項目。Go API は `GET` / `PUT /api/day-plan`（[docs/dynamodb.md](docs/dynamodb.md)）。画面の接続は [#6](https://github.com/tag0203/kintore-memo/issues/6)。いま画面はブラウザのメモリ |
+| 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の DayPlan 1 項目。Go API の `GET` / `PUT /api/day-plan`（[docs/dynamodb.md](docs/dynamodb.md)、[#6](https://github.com/tag0203/kintore-memo/issues/6)）。Cognito と API URL が無いローカルだけブラウザのメモリ |
 
 モックの「最近」は、ピッカーで選んだ順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
 
@@ -143,4 +148,6 @@ sam deploy
 
 Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
 
-DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です。画面の API クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。メニュー API は Go にあります。画面からの保存は [#6](https://github.com/tag0203/kintore-memo/issues/6) です。
+DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です。画面の記録クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。今日のメニューは Go の `GET` / `PUT /api/day-plan` と `src/data/dayPlanClient.ts` です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。
+
+GitHub Actions の CI は pull request と `main` で、テスト、型チェック、ビルド、`check:secrets`、Go のテスト、`sam validate --lint`、`sam build` を実行します。AWS への反映は OIDC の手動ワークフローで、ロールが未設定の間は何もしません。長期のアクセスキーは使いません。手順は [docs/github-actions-oidc.md](docs/github-actions-oidc.md) です。

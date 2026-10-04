@@ -36,10 +36,20 @@ describe("ApiFunction runtime", () => {
     expect(template).toContain("Handler: bootstrap");
     expect(template).toContain("CodeUri: ../api/");
     expect(template).toContain("BuildMethod: go1.x");
-    expect(template).toContain("- PUT");
     expect(template).not.toContain("nodejs");
     expect(template).not.toContain("CodeUri: ../backend/");
     expect(template).not.toContain("CodeUri: ../worker/");
+  });
+});
+
+describe("HttpApi CORS", () => {
+  it("allows PUT so the browser can save a DayPlan", () => {
+    const start = template.indexOf("CorsConfiguration:");
+    const end = template.indexOf("Tags:", start);
+    const cors = template.slice(start, end);
+    expect(cors).toContain("- PUT");
+    expect(cors).toContain("- GET");
+    expect(cors).toContain("- OPTIONS");
   });
 });
 

@@ -217,7 +217,7 @@ Resources:
       Runtime: provided.al2023
       Role: !GetAtt ApiFunctionRole.Arn
       Timeout: 20
-      Description: Go API (#23). JWT auth stays on the HTTP API authorizer.
+      Description: Go API (#23) for the Notion wrapper (#10) and DayPlan (#6). JWT auth stays on the HTTP API authorizer.
       Environment:
         Variables:
           TABLE_NAME: !Ref AppTable

@@ -11,14 +11,14 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
-| Lambda | Go（`provided.al2023`、#23）。`worker/` と Node `backend/` はデプロイしない |
+| Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` と Node `backend/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
 | CloudWatch Logs | Lambda ログ。保持 7 または 14 日（既定 14） |
 | IAM | Lambda は対象テーブル・対象パラメータ・自ログだけ |
 
-カスタムドメイン・ACM・DNS は [#13](https://github.com/tag0203/kintore-memo/issues/13) です。GitHub Actions（OIDC）は [#14](https://github.com/tag0203/kintore-memo/issues/14) です。
+カスタムドメイン・ACM・DNS は [#13](https://github.com/tag0203/kintore-memo/issues/13) です。GitHub Actions の CI と OIDC の手順は [#14](https://github.com/tag0203/kintore-memo/issues/14) で、[github-actions-oidc.md](./github-actions-oidc.md) にあります。
 
 ## 前提ツール
 
@@ -36,15 +36,18 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 src/                    SPA（既存）
 api/                    本番 Lambda（Go）。worker/ も Node backend/ も本番経路ではない
 worker/                 参考実装。本番経路にしない
-backend/                非推奨の Node Lambda。契約テスト用。SAM はデプロイしない
+backend/                非推奨の Node Lambda（Notion と DayPlan の契約テスト）。SAM はデプロイしない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値
+  github-oidc.yaml      Actions 用 OIDC ロール（bootstrap。Actions からは適用しない）
 docs/
   architecture-aws.md
   aws-auth.md           Cognito ログイン（#9）
   aws-deploy.md         このファイル
   dynamodb.md           単一テーブル（#11）
+  github-actions-oidc.md
+.github/workflows/      CI と、手動の OIDC デプロイ
 ```
 
 ## デプロイ（1 環境）
@@ -189,10 +192,15 @@ sam delete --stack-name kintore-memo-dev
 
 S3 にオブジェクトが残っているとバケット削除に失敗することがあります。先に空にしてください。
 
+## GitHub Actions
+
+CI は pull request と `main` で毎回、テスト、型チェック、ビルド、`check:secrets`、`sam validate --lint`、`sam build` を実行します。AWS アカウントは要りません。
+
+OIDC での `sam deploy` と S3 / CloudFront への公開は手動ワークフローです。ロール用のリポジトリ変数が空の間は成功のまま何もしません。アクセスキーは使いません。作成手順と権限は [github-actions-oidc.md](./github-actions-oidc.md) です。
+
 ## スコープ外（#8 ではやらない）
 
 - Cognito ログイン UI とトークン付与 → [aws-auth.md](./aws-auth.md)（#9）
-- 画面からの DayPlan 復元（API は `GET` / `PUT /api/day-plan`。設計は [dynamodb.md](./dynamodb.md)、画面は #6）
-- 画面の API クライアント差し替え（#12。実装は `src/data/httpClient.ts`）
+- 実アカウントでの DayPlan 疎通（実装は Go の `GET` / `PUT /api/day-plan` と `src/data/dayPlanClient.ts`。設計は [dynamodb.md](./dynamodb.md)）
+- 画面の記録クライアント（#12。実装は `src/data/httpClient.ts`）
 - カスタムドメイン / ACM / Cloudflare DNS（#13）
-- GitHub Actions OIDC（#14）
