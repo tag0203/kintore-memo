@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PARTITION_KEY, SORT_KEY, TTL_ATTRIBUTE } from "../backend/dynamodb.mjs";
+
+const PARTITION_KEY = "pk";
+const SORT_KEY = "sk";
+const TTL_ATTRIBUTE = "ttl";
 
 const templatePath = fileURLToPath(new URL("./template.yaml", import.meta.url));
 const template = readFileSync(templatePath, "utf8");
@@ -31,7 +34,7 @@ describe("AppTable", () => {
 });
 
 describe("ApiFunction runtime", () => {
-  it("builds the Go Lambda and leaves the Node backend and worker undeployed", () => {
+  it("builds the Go Lambda in api/ and does not deploy worker/", () => {
     expect(template).toContain("Runtime: provided.al2023");
     expect(template).toContain("Handler: bootstrap");
     expect(template).toContain("CodeUri: ../api/");

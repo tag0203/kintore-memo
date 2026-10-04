@@ -8,7 +8,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 
 | ファイル | いつ動くか | 内容 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`（画面・参考 Worker・`backend/`）、`npm run typecheck`、`npm run build`、`npm run check:secrets`（ビルド後にも実行）、`go test`。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`（Go 1.22）。OIDC 用テンプレートがあればそれも lint |
+| `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`（画面・参考 Worker）、`npm run typecheck`、`npm run build`、`npm run check:secrets`（ビルド後にも実行）、`go test`。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`（Go 1.22）。OIDC 用テンプレートがあればそれも lint |
 | `.github/workflows/deploy.yml` | Actions タブからの手動実行だけ | 下の変数が空なら no-op。あるときだけ OIDC で `sam deploy` し、SPA を S3 に同期して CloudFront を無効化 |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。

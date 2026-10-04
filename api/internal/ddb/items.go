@@ -1,5 +1,5 @@
 // Package ddb builds the single-table items described in docs/dynamodb.md.
-// It does not talk to AWS. The shapes match backend/dynamodb.mjs.
+// It does not talk to AWS.
 package ddb
 
 import (

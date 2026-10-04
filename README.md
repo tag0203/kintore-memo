@@ -39,9 +39,7 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
 
 画面は `WorkoutLogClient` だけを見ます。本番の Notion アクセスは **API Gateway → Go Lambda（`api/`）** だけで、ブラウザは Notion を直接呼びません。トークンは SSM SecureString です。詳細は [docs/architecture-aws.md](docs/architecture-aws.md)。
 
-`worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Go Lambda は `worker/` を import しません。
-
-`backend/` は以前の Node Lambda です。**非推奨**で、SAM はデプロイしません。Notion と DayPlan の契約テストを残すために置いてあります。本番の変更は `api/` に入れます。
+`worker/` と `wrangler.toml` は API の形と Notion マッピングの参考実装です。**本番経路にはしません。** Go Lambda は `worker/` を import しません。本番の変更は `api/` に入れます。
 
 ```text
 ブラウザ（React）
@@ -67,8 +65,6 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
 
 参考: Cloudflare Worker（デプロイしない）
   worker/notionClient.ts
-
-非推奨: Node Lambda backend/（デプロイしない。契約テスト用）
 ```
 
 Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。`.env.example` の `VITE_` は Cognito / API の公開設定だけです（秘密ではない）。Notion のキーには `VITE_` を付けません。
@@ -149,6 +145,6 @@ sam deploy
 
 Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
 
-DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です。画面の記録クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。今日のメニューは Go の `GET` / `PUT /api/day-plan` と `src/data/dayPlanClient.ts` です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。
+DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。画面の記録クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。今日のメニューは Go の `GET` / `PUT /api/day-plan` と `src/data/dayPlanClient.ts` です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。
 
 GitHub Actions の CI は pull request と `main` で、テスト、型チェック、ビルド、`check:secrets`、Go のテスト、`sam validate --lint`、`sam build` を実行します。AWS への反映は OIDC の手動ワークフローで、ロールが未設定の間は何もしません。長期のアクセスキーは使いません。手順は [docs/github-actions-oidc.md](docs/github-actions-oidc.md) です。

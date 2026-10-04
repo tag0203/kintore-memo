@@ -15,7 +15,6 @@ function rel(root, path) {
 function isAllowed(path) {
   return (
     path.startsWith("worker/") ||
-    path.startsWith("backend/") ||
     path.startsWith("api/") ||
     path.startsWith("infra/") ||
     path.startsWith("docs/") ||
@@ -77,7 +76,7 @@ export function findLeaks(root, options = {}) {
       return;
     }
     if (
-      (pathRel.startsWith("src/") || pathRel.startsWith("backend/")) &&
+      pathRel.startsWith("src/") &&
       /from\s+["'][^"']*worker\//.test(text)
     ) {
       failures.push(`${pathRel} が Worker を import しています`);

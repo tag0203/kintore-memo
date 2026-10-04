@@ -2,7 +2,7 @@
 
 Issue [#11](https://github.com/tag0203/kintore-memo/issues/11)。アプリ固有データだけを、オンデマンドのテーブル 1 つに置く。記録の正は Notion のままです。方針は [architecture-aws.md](./architecture-aws.md) が正で、このページはキーと TTL だけを固定します。
 
-テーブル定義と Lambda の IAM は `infra/template.yaml` の `AppTable` です。本番の項目は Go の `api/internal/ddb` が作ります。非推奨の Node 参照は `backend/dynamodb.mjs` です。AWS への実デプロイはしません。
+テーブル定義と Lambda の IAM は `infra/template.yaml` の `AppTable` です。本番の項目は Go の `api/internal/ddb` が作ります。AWS への実デプロイはしません。
 
 ## 物理テーブル
 
@@ -69,7 +69,7 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | `updatedAt` | String | 書き込み時刻（ISO-8601、UTC） |
 | `ttl` | Number | 下表 |
 
-`api/internal/ddb` の `BuildDayPlanItem`（同じ規則の Node 参照は `backend/dynamodb.mjs`）は、この属性以外を受け取りません。
+`api/internal/ddb` の `BuildDayPlanItem` は、この属性以外を受け取りません。
 
 ## NotionCache の属性
 
@@ -111,7 +111,7 @@ Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `
 
 ## HTTP API（#6）
 
-本番の読み書きは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。Node の `backend/` は同じ契約のテスト用で、SAM はデプロイしません。Lambda はトークンを再検証しません。API Gateway の JWT Authorizer を通った `requestContext.authorizer.jwt.claims.sub` を `userId` にします。本文やクエリのユーザー ID ではキーを作りません。
+本番の読み書きは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。Lambda はトークンを再検証しません。API Gateway の JWT Authorizer を通った `requestContext.authorizer.jwt.claims.sub` を `userId` にします。本文やクエリのユーザー ID ではキーを作りません。
 
 | メソッド | 経路 | 内容 |
 | --- | --- | --- |
