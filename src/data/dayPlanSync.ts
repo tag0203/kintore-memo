@@ -26,9 +26,10 @@ function snapshot(input: DayPlanInput): DayPlanInput {
  */
 export function createDayPlanSaver(
   save: (input: DayPlanInput) => Promise<void>,
-  options: { waitMs?: number } = {},
+  options: { waitMs?: number; allowWrite?: () => boolean } = {},
 ) {
   const waitMs = options.waitMs ?? DAY_PLAN_SAVE_WAIT_MS;
+  const allowWrite = options.allowWrite ?? (() => true);
   let listeners: DayPlanSaverListeners = {};
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: DayPlanInput | null = null;
@@ -36,10 +37,12 @@ export function createDayPlanSaver(
   let chain: Promise<void> = Promise.resolve();
 
   async function send() {
+    if (!allowWrite()) return;
     const input = latest;
     if (!input) return;
     const key = fingerprint(input);
     if (key === savedKey) return;
+    if (!allowWrite()) return;
     try {
       await save(input);
       if (latest && fingerprint(latest) === key) {

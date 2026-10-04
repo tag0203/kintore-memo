@@ -64,12 +64,15 @@ export function SessionProvider({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const { registerBeforeSignOut } = useAuth();
+  const { registerBeforeSignOut, readSessionEpoch, required, signOut } = useAuth();
 
-  const saver = useMemo(
-    () => (dayPlan ? createDayPlanSaver((input) => dayPlan.save(input).then(() => undefined)) : null),
-    [dayPlan],
-  );
+  const saver = useMemo(() => {
+    if (!dayPlan) return null;
+    const epoch = readSessionEpoch();
+    return createDayPlanSaver((input) => dayPlan.save(input).then(() => undefined), {
+      allowWrite: () => readSessionEpoch() === epoch,
+    });
+  }, [dayPlan, readSessionEpoch]);
 
   useEffect(() => {
     if (!saver) return;
@@ -192,20 +195,46 @@ export function SessionProvider({
 
   if (phase === "error") {
     return (
-      <div className="app-shell">
-        <section className="screen">
-          <div className="status-line">
-            <p className="text-error">{loadError}</p>
-            <button type="button" className="btn secondary" onClick={() => setAttempt((current) => current + 1)}>
-              再読み込み
-            </button>
-          </div>
-        </section>
-      </div>
+      <DayPlanLoadFailure
+        message={loadError ?? "メニューを読み込めませんでした"}
+        onRetry={() => setAttempt((current) => current + 1)}
+        onSignOut={required ? () => void signOut() : null}
+      />
     );
   }
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+}
+
+export function DayPlanLoadFailure({
+  message,
+  onRetry,
+  onSignOut,
+}: {
+  message: string;
+  onRetry: () => void;
+  onSignOut: (() => void) | null;
+}) {
+  return (
+    <div className="app-shell">
+      <section className="screen">
+        {onSignOut && (
+          <div className="today-head">
+            <span />
+            <button type="button" className="text-btn" onClick={onSignOut}>
+              ログアウト
+            </button>
+          </div>
+        )}
+        <div className="status-line">
+          <p className="text-error">{message}</p>
+          <button type="button" className="btn secondary" onClick={onRetry}>
+            再読み込み
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 export function useSession(): Session {

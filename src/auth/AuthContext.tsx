@@ -10,7 +10,7 @@ import {
 } from "react";
 import { completeNewPassword, refreshAuthTokens, signInWithPassword } from "./cognitoClient";
 import { readCognitoConfig, type CognitoConfig } from "./config";
-import { mayApplyRefreshedTokens } from "./sessionEpoch";
+import { idTokenAfterRefresh, mayApplyRefreshedTokens } from "./sessionEpoch";
 import { runBeforeSignOut } from "./signOutSequence";
 import { clearStoredTokens, loadStoredTokens, saveStoredTokens } from "./tokenStore";
 import { displayEmailFromIdToken, isIdTokenFresh, type AuthTokens } from "./tokens";
@@ -30,6 +30,8 @@ interface AuthContextValue {
   registerBeforeSignOut: (hook: () => Promise<void>) => () => void;
   /** API Gateway 用。期限切れなら refresh。未ログインなら throw */
   getIdToken: () => Promise<string>;
+  /** Logout bumps this when tokens are cleared. DayPlan writes from an older epoch must stop. */
+  readSessionEpoch: () => number;
   pendingNewPasswordEmail: string | null;
 }
 
@@ -118,9 +120,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const epoch = sessionEpochRef.current;
     try {
       const next = await refreshAuthTokens(config, tokens.refreshToken);
-      if (!mayApplyRefreshedTokens(epoch, sessionEpochRef.current)) return next.idToken;
-      applyTokens(next);
-      return next.idToken;
+      const idToken = idTokenAfterRefresh(epoch, sessionEpochRef.current, next.idToken);
+      if (mayApplyRefreshedTokens(epoch, sessionEpochRef.current)) applyTokens(next);
+      return idToken;
     } catch (error) {
       if (!mayApplyRefreshedTokens(epoch, sessionEpochRef.current)) {
         throw error instanceof Error ? error : new Error("ログアウトしました");
@@ -129,6 +131,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error("セッションの有効期限が切れました。再度ログインしてください");
     }
   }, [applyTokens, config, signOut, tokens]);
+
+  const readSessionEpoch = useCallback(() => sessionEpochRef.current, []);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -141,9 +145,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       registerBeforeSignOut,
       getIdToken,
+      readSessionEpoch,
       pendingNewPasswordEmail: challenge?.email ?? null,
     }),
-    [challenge?.email, config, finishNewPassword, getIdToken, registerBeforeSignOut, signIn, signOut, status, tokens],
+    [
+      challenge?.email,
+      config,
+      finishNewPassword,
+      getIdToken,
+      readSessionEpoch,
+      registerBeforeSignOut,
+      signIn,
+      signOut,
+      status,
+      tokens,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

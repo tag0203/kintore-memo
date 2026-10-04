@@ -76,6 +76,19 @@ describe("createDayPlanSaver", () => {
     expect(save).toHaveBeenCalledWith(plan("b"));
   });
 
+  it("does not let a saver from an older session replace a newer plan", async () => {
+    let epoch = 1;
+    const save = vi.fn(async () => {});
+    const stale = createDayPlanSaver(save, { allowWrite: () => epoch === 0 });
+    const current = createDayPlanSaver(save, { allowWrite: () => epoch === 1 });
+    stale.schedule(plan("脚"));
+    current.schedule(plan("胸"));
+    await stale.flush();
+    await current.flush();
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith(plan("胸"));
+  });
+
   it("cancel drops a pending debounce without blocking a later edit", async () => {
     vi.useFakeTimers();
     const save = vi.fn(async () => {});
