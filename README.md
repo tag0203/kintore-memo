@@ -144,3 +144,5 @@ sam deploy
 Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。`VITE_COGNITO_*` を `.env` に入れるとログイン画面が出ます。未設定なら従来どおりモックだけで動きます。
 
 DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。今日のメニューの読み書きは Lambda の `GET` / `PUT /api/day-plan` です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。Notion API は `backend/` です（[#10](https://github.com/tag0203/kintore-memo/issues/10)）。画面の記録クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。
+
+GitHub Actions の CI は pull request と `main` で、テスト、型チェック、ビルド、`check:secrets`、`sam validate --lint`、`sam build` を実行します。AWS への反映は OIDC の手動ワークフローで、ロールが未設定の間は何もしません。長期のアクセスキーは使いません。手順は [docs/github-actions-oidc.md](docs/github-actions-oidc.md) です。
