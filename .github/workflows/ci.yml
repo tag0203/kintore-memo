@@ -33,6 +33,12 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: api/go.sum
+
       - name: Install dependencies
         run: npm ci
 
@@ -41,6 +47,16 @@ jobs:
 
       - name: Test
         run: npm test
+
+      - name: Test Go API
+        env:
+          GOTOOLCHAIN: local
+        run: go test -C api ./...
+
+      - name: Compile the Lambda binary for arm64
+        env:
+          GOTOOLCHAIN: local
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -C api -o /tmp/bootstrap .
 
       - name: Build
         run: npm run build
@@ -80,6 +96,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Go
+        if: steps.sam.outputs.present == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: api/go.sum
+
       - name: Setup SAM CLI
         if: steps.sam.outputs.present == 'true'
         uses: aws-actions/setup-sam@v3
@@ -111,6 +134,8 @@ jobs:
       - name: Build API
         if: steps.sam.outputs.present == 'true'
         working-directory: infra
+        env:
+          GOTOOLCHAIN: local
         run: |
           set -euo pipefail
           sam build --template template.yaml

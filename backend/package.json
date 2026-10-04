@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Lambda Notion wrapper (#10) and DayPlan read/write (#6). worker/ is not the production path.",
+  "description": "Deprecated Node Lambda (#10 and DayPlan #6). Production is the Go API in api/ (#23). SAM does not deploy this package. worker/ is not the production path.",
   "main": "index.mjs",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.901.0",

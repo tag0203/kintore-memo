@@ -69,17 +69,24 @@ describe("secret check", () => {
     }
   });
 
-  it("allows AWS infra, backend, and docs to name SSM parameters", () => {
+  it("allows AWS infra, the Go API, the deprecated Node backend, and docs to name SSM parameters", () => {
     const root = writeTree({
       "infra/template.yaml": `${tokenName}_PARAM: /app/dev/notion/token\n`,
       "backend/index.mjs": `process.env.${tokenName}_PARAM\n`,
+      "api/main.go": `os.Getenv("${tokenName}")\n`,
       "docs/aws-deploy.md": "aws ssm put-parameter --name /app/dev/notion/token\n",
       "src/app.ts": "export const label = 'スクワット';\n",
     });
     try {
       expect(
         findLeaks(root, {
-          tracked: new Set(["infra/template.yaml", "backend/index.mjs", "docs/aws-deploy.md", "src/app.ts"]),
+          tracked: new Set([
+            "infra/template.yaml",
+            "backend/index.mjs",
+            "api/main.go",
+            "docs/aws-deploy.md",
+            "src/app.ts",
+          ]),
         }),
       ).toEqual([]);
     } finally {

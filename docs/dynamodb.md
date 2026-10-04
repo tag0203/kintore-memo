@@ -2,7 +2,7 @@
 
 Issue [#11](https://github.com/tag0203/kintore-memo/issues/11)。アプリ固有データだけを、オンデマンドのテーブル 1 つに置く。記録の正は Notion のままです。方針は [architecture-aws.md](./architecture-aws.md) が正で、このページはキーと TTL だけを固定します。
 
-テーブル定義と Lambda の IAM は `infra/template.yaml` の `AppTable` です。項目の形は `backend/dynamodb.mjs` が作ります。AWS への実デプロイはしません。
+テーブル定義と Lambda の IAM は `infra/template.yaml` の `AppTable` です。本番の項目は Go の `api/internal/ddb` が作ります。非推奨の Node 参照は `backend/dynamodb.mjs` です。AWS への実デプロイはしません。
 
 ## 物理テーブル
 
@@ -69,7 +69,7 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | `updatedAt` | String | 書き込み時刻（ISO-8601、UTC） |
 | `ttl` | Number | 下表 |
 
-`backend/dynamodb.mjs` の `buildDayPlanItem` は、この属性以外を受け取りません。
+`api/internal/ddb` の `BuildDayPlanItem`（同じ規則の Node 参照は `backend/dynamodb.mjs`）は、この属性以外を受け取りません。
 
 ## NotionCache の属性
 
@@ -99,11 +99,11 @@ DayPlan の書き込みは、Asia/Tokyo の当日・前日・翌日の `date` �
 
 | 操作 | API | 呼び元 |
 | --- | --- | --- |
-| その日の DayPlan を読む | `GetItem` | `GET /api/day-plan?date=`（#6） |
-| DayPlan を書く | `PutItem`（全体） | `PUT /api/day-plan`（#6） |
-| キャッシュを読む | `GetItem` | #10 |
-| キャッシュを書く | `PutItem` | #10 |
-| キャッシュを捨てる | `DeleteItem` | #10 |
+| その日の DayPlan を読む | `GetItem`（強い整合性） | Go の `GET /api/day-plan?date=`（#6）。リロードが保存直後の項目を返すため。NotionCache の `GetItem` は既定の結果整合性 |
+| DayPlan を書く | `PutItem`（全体） | Go の `PUT /api/day-plan`（#6） |
+| キャッシュを読む | `GetItem` | Go API（#10） |
+| キャッシュを書く | `PutItem` | Go API（#10） |
+| キャッシュを捨てる | `DeleteItem` | Go API（#10） |
 
 Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` だけを `AppTable` の ARN に許可します。#6 が使うのは `GetItem` と `PutItem` です。GSI が無いので `index/*` は付けません。`Scan` と `Query` と Batch は付けません。ユーザーごとの分離は IAM 条件ではなく、ハンドラが `sub` から `pk` を組むことで行います。
 
@@ -111,15 +111,15 @@ Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `
 
 ## HTTP API（#6）
 
-Lambda はトークンを再検証しません。API Gateway の JWT Authorizer を通った `requestContext.authorizer.jwt.claims.sub` を `userId` にします。本文やクエリのユーザー ID ではキーを作りません。
+本番の読み書きは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。Node の `backend/` は同じ契約のテスト用で、SAM はデプロイしません。Lambda はトークンを再検証しません。API Gateway の JWT Authorizer を通った `requestContext.authorizer.jwt.claims.sub` を `userId` にします。本文やクエリのユーザー ID ではキーを作りません。
 
 | メソッド | 経路 | 内容 |
 | --- | --- | --- |
-| GET | `/api/day-plan?date=YYYY-MM-DD` | `GetItem`（`dayPlanKey(sub, date)`）と `readDayPlanItem`。項目が無ければ `memo: ""`、`exercises: []`、`finished: false`。シードの「脚」と 3 種目は返さない |
-| PUT | `/api/day-plan` | 本文の `date` / `memo` / `exercises` / `finished` を `buildDayPlanItem` に渡し、`PutItem` で項目ごと置き換える |
+| GET | `/api/day-plan?date=YYYY-MM-DD` | 強い整合性の `GetItem`（`dayPlanKey(sub, date)`）と `readDayPlanItem`。項目が無ければ `memo: ""`、`exercises: []`、`finished: false`、`updatedAt: null`。シードの「脚」と 3 種目は返さない |
+| PUT | `/api/day-plan` | 本文の `date` / `memo` / `exercises` / `finished` を `buildDayPlanItem` に渡し、`PutItem` で項目ごと置き換える。`userId` は本文ではなく JWT の `sub` |
 
-`date` は画面のセッション日付のままです。東京の当日・前日・翌日以外は 400 `date_window` です。`sub` が無い、または UUID でないときは 401 です。`TABLE_NAME` が無いときは 503 です。保存済み項目が契約と違うときは 502 です。
+`date` は画面のセッション日付のままです。東京の当日・前日・翌日以外は 400 `date_window` です。`sub` が無い、または UUID でないときは 401 です。`TABLE_NAME` が無いときは 503 です。保存済み項目が契約と違うときは 502 です。空の `memo`、空の `exercises`、`finished: false` は、属性が保存されていれば有効です。属性そのものが無い項目は 502 です。
 
 応答は画面のセッションと同じ 5 フィールドです（`date` / `memo` / `exercises` / `finished` / `updatedAt`）。`pk` や `ttl` は返しません。未保存の GET の `updatedAt` は `null` です。重量・回数・セット・きつさが本文にあっても項目には書きません。
 
-画面は Cognito と `VITE_API_BASE_URL` があるとき、この API でその日のメニューを保存し、リロード後に復元します。どちらかが無いローカルは、これまでどおりメモリ上のシードです。
+画面は Cognito と `VITE_API_BASE_URL` があるとき、この API でその日のメニューを保存し、リロード後に復元します。DayPlan の `GetItem` は強い整合性なので、保存直後の再読み込みでも同じ項目が返ります。どちらかが無いローカルは、これまでどおりメモリ上のシードです。

@@ -11,3 +11,4 @@ infra/env.json
 .DS_Store
 .tsbuildinfo
 coverage
+api/bootstrap

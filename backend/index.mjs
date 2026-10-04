@@ -1,5 +1,7 @@
 /**
- * Lambda entry for the Notion wrapper (#10) and DayPlan (#6).
+ * Deprecated Node Lambda for the Notion wrapper (#10) and DayPlan (#6).
+ * Production is the Go handler in api/ (#23). SAM does not deploy this file.
+ * It remains so these contract tests keep running. New production changes belong in api/.
  * Item shapes come from dynamodb.mjs (docs/dynamodb.md).
  * worker/ is the reference implementation and is not invoked here.
  *

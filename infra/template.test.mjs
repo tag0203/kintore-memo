@@ -30,6 +30,18 @@ describe("AppTable", () => {
   });
 });
 
+describe("ApiFunction runtime", () => {
+  it("builds the Go Lambda and leaves the Node backend and worker undeployed", () => {
+    expect(template).toContain("Runtime: provided.al2023");
+    expect(template).toContain("Handler: bootstrap");
+    expect(template).toContain("CodeUri: ../api/");
+    expect(template).toContain("BuildMethod: go1.x");
+    expect(template).not.toContain("nodejs");
+    expect(template).not.toContain("CodeUri: ../backend/");
+    expect(template).not.toContain("CodeUri: ../worker/");
+  });
+});
+
 describe("HttpApi CORS", () => {
   it("allows PUT so the browser can save a DayPlan", () => {
     const start = template.indexOf("CorsConfiguration:");
