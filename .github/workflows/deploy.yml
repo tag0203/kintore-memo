@@ -114,12 +114,19 @@ jobs:
           fi
           sam build --template template.yaml
 
+      - name: Pack SAM build (preserve bootstrap executable bit)
+        run: |
+          set -euo pipefail
+          # upload-artifact zip restores files as 0644 and drops the executable bit.
+          # provided.al2023 requires bootstrap to be executable (Runtime.InvalidEntrypoint otherwise).
+          tar -C infra -czf /tmp/sam-build.tar.gz .aws-sam
+          tar -tzf /tmp/sam-build.tar.gz | grep -q 'build/ApiFunction/bootstrap$'
+
       - name: Upload SAM build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sam-build
-          path: infra/.aws-sam/
-          include-hidden-files: true
+          path: /tmp/sam-build.tar.gz
           if-no-files-found: error
           retention-days: 1
 
@@ -156,7 +163,17 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sam-build
-          path: infra/.aws-sam/
+          path: /tmp
+
+      - name: Unpack SAM build
+        run: |
+          set -euo pipefail
+          tar -C infra -xzf /tmp/sam-build.tar.gz
+          if [ ! -x infra/.aws-sam/build/ApiFunction/bootstrap ]; then
+            echo "bootstrap is missing or not executable after unpack. Refusing to deploy."
+            ls -la infra/.aws-sam/build/ApiFunction/ || true
+            exit 1
+          fi
 
       - name: Setup SAM CLI
         uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
