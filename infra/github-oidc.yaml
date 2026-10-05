@@ -35,7 +35,7 @@ Parameters:
     Type: String
     Default: .github/workflows/deploy.yml
     AllowedPattern: "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$"
-    Description: Only this workflow file may assume the deploy role (job_workflow_ref).
+    Description: Only this workflow file may assume the deploy role (workflow_ref).
   CreateOidcProvider:
     Type: String
     Default: "true"
@@ -142,7 +142,7 @@ Resources:
               StringEquals:
                 "token.actions.githubusercontent.com:aud": sts.amazonaws.com
                 "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}"
-                "token.actions.githubusercontent.com:job_workflow_ref": !Sub "${GitHubOwner}/${GitHubRepo}/${DeployWorkflowPath}@refs/heads/${AllowedBranch}"
+                "token.actions.githubusercontent.com:workflow_ref": !Sub "${GitHubOwner}/${GitHubRepo}/${DeployWorkflowPath}@refs/heads/${AllowedBranch}"
       Policies:
         - PolicyName: GitHubDeploy
           PolicyDocument:

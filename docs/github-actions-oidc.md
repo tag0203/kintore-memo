@@ -11,7 +11,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
 | `.github/workflows/deploy.yml` | Actions タブからの手動実行だけ | 下の変数が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化 |
 
-デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は `job_workflow_ref` でも `.github/workflows/deploy.yml` に限定します（`main` 上の別 workflow からの引き受けを防ぐ）。
+デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は `workflow_ref` でも `.github/workflows/deploy.yml` に限定します（`main` 上の別 workflow からの引き受けを防ぐ。直接起動の workflow では `workflow_ref` を使い、reusable workflow 向けの `job_workflow_ref` は使わない）。
 
 本番 API は Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。CI は `go test` と、そのバイナリを対象にした `sam build` を実行します。Cloudflare DNS（[#13](https://github.com/tag0203/kintore-memo/issues/13)）はこのワークフローの対象外です。
 
@@ -92,13 +92,13 @@ gh api repos/tag0203/kintore-memo/actions/oidc/customization/sub
 repo:tag0203@20207728/kintore-memo@1389679197:ref:refs/heads/main
 ```
 
-加えて `job_workflow_ref` を次に固定します。
+加えて `workflow_ref` を次に固定します。
 
 ```text
 tag0203/kintore-memo/.github/workflows/deploy.yml@refs/heads/main
 ```
 
-テンプレートの既定パラメータがこの値です。信頼は `StringEquals` でこの `sub`・`aud`・`job_workflow_ref` だけです。pull request、他ブランチ、他 workflow、GitHub Environment は一致しません。Environment を足すと `sub` が `repo:…:environment:名前` に変わるので、そのときはテンプレートを更新します。
+テンプレートの既定パラメータがこの値です。信頼は `StringEquals` でこの `sub`・`aud`・`workflow_ref` だけです。pull request、他ブランチ、他 workflow、GitHub Environment は一致しません。Environment を足すと `sub` が `repo:…:environment:名前` に変わるので、そのときはテンプレートを更新します。
 
 名前だけの古い形式（`repo:tag0203/kintore-memo:ref:refs/heads/main`）では引き受けられません。
 

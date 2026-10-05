@@ -17,7 +17,8 @@ describe("GitHub OIDC bootstrap", () => {
   });
 
   it("limits AssumeRole to main and the Deploy workflow file", () => {
-    expect(template).toContain("token.actions.githubusercontent.com:job_workflow_ref");
+    expect(template).toContain("token.actions.githubusercontent.com:workflow_ref");
+    expect(template).not.toContain("token.actions.githubusercontent.com:job_workflow_ref");
     expect(template).toContain("DeployWorkflowPath");
     expect(template).toContain(".github/workflows/deploy.yml");
     expect(template).toContain("ref:refs/heads/${AllowedBranch}");
