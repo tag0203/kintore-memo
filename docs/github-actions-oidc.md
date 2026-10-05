@@ -150,4 +150,4 @@ tag0203/kintore-memo/.github/workflows/deploy.yml@refs/heads/main
 
 `infra/samconfig.toml` の `confirm_changeset = true` は手元用です。ワークフローは `--no-confirm-changeset` で上書きします。
 
-実アカウントがまだ無い状態では、変数を作らずにこのリポジトリをマージして構いません。CI は AWS なしで通り、Deploy は選んでも no-op です。
+実アカウントがまだ無い状態では、変数を作らずにこのリポジトリをマージして構いません。CI は AWS なしで通り（`sam validate --lint` / `sam build` を含む）、Deploy は選んでも no-op です。
