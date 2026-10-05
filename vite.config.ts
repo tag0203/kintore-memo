@@ -42,7 +42,6 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "worker/**/*.test.ts",
-      "backend/**/*.test.mjs",
       "infra/**/*.test.mjs",
       "scripts/**/*.test.mjs",
     ],

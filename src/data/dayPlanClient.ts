@@ -18,7 +18,7 @@ export interface DayPlanClient {
   save(input: DayPlanInput): Promise<DayPlanSnapshot>;
 }
 
-/** backend/dynamodb.mjs の LIMITS.exerciseCount と同じ。41 件目は画面に足さない。 */
+/** docs/dynamodb.md の種目数上限と同じ。41 件目は画面に足さない。 */
 export const DAY_PLAN_EXERCISE_LIMIT = 40;
 
 export const DAY_PLAN_TOO_MANY_EXERCISES = "種目が多すぎます";

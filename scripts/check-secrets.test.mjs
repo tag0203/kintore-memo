@@ -69,10 +69,9 @@ describe("secret check", () => {
     }
   });
 
-  it("allows AWS infra, the Go API, the deprecated Node backend, and docs to name SSM parameters", () => {
+  it("allows AWS infra, the Go API, and docs to name SSM parameters", () => {
     const root = writeTree({
       "infra/template.yaml": `${tokenName}_PARAM: /app/dev/notion/token\n`,
-      "backend/index.mjs": `process.env.${tokenName}_PARAM\n`,
       "api/main.go": `os.Getenv("${tokenName}")\n`,
       "docs/aws-deploy.md": "aws ssm put-parameter --name /app/dev/notion/token\n",
       "src/app.ts": "export const label = 'スクワット';\n",
@@ -82,7 +81,6 @@ describe("secret check", () => {
         findLeaks(root, {
           tracked: new Set([
             "infra/template.yaml",
-            "backend/index.mjs",
             "api/main.go",
             "docs/aws-deploy.md",
             "src/app.ts",
@@ -94,16 +92,15 @@ describe("secret check", () => {
     }
   });
 
-  it("rejects a backend import of the worker reference", () => {
+  it("rejects a screen import of the worker reference", () => {
     const root = writeTree({
-      "backend/index.mjs": "import { handleRequest } from \"../worker/index.ts\";\n",
-      "src/app.ts": "export const label = 'スクワット';\n",
+      "src/app.ts": "import { handleRequest } from \"../worker/index.ts\";\n",
     });
     try {
       const failures = findLeaks(root, {
-        tracked: new Set(["backend/index.mjs", "src/app.ts"]),
+        tracked: new Set(["src/app.ts"]),
       });
-      expect(failures.some((line) => line.includes("backend/index.mjs"))).toBe(true);
+      expect(failures.some((line) => line.includes("src/app.ts"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

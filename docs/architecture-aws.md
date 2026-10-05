@@ -2,7 +2,7 @@
 
 筋トレメモを、Notion ラッパー個人 Web アプリの **AWS 学習サンプル**として置くための方針です。第一用途は筋トレの記録です。画面の動きと Notion の列は [README](../README.md) が正です。このページは「なぜ AWS か」と「何を作るか」だけを固定します。
 
-IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。本番の Notion ラッパーは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。Node の `backend/` は非推奨です（[#10](https://github.com/tag0203/kintore-memo/issues/10) の実装）。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。
+IaC の骨格は [#8](https://github.com/tag0203/kintore-memo/issues/8) で `infra/template.yaml`（AWS SAM）にあります。デプロイと `sam local` の手順は [aws-deploy.md](./aws-deploy.md)、Cognito ログインは [aws-auth.md](./aws-auth.md)、単一テーブルは [dynamodb.md](./dynamodb.md) です。本番の Notion ラッパーは Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)、[#10](https://github.com/tag0203/kintore-memo/issues/10)）です。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。
 
 ## 目的
 
@@ -103,7 +103,6 @@ src/                    既存の SPA（auth/ に Cognito 自前フォーム #9�
 public/
 api/                    本番 Lambda（Go、provided.al2023、#23）
 worker/                 参考実装。本番経路にしない
-backend/                非推奨の Node Lambda（Notion と DayPlan の契約テスト）。SAM はデプロイしない
 infra/template.yaml     SAM（#8）。API は Go
 infra/samconfig.toml
 infra/github-oidc.yaml  デプロイ用 IAM（bootstrap。Actions からは作らない）
@@ -188,7 +187,7 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - bootstrap の一括取得（推奨）
 - `GET /api/day-plan?date=YYYY-MM-DD` と `PUT /api/day-plan`（本文は `date` / `memo` / `exercises` / `finished`。ユーザー ID は JWT の `sub`）
 
-本番 Lambda は [#23](https://github.com/tag0203/kintore-memo/issues/23) の `api/` です。[#10](https://github.com/tag0203/kintore-memo/issues/10) の Node `backend/` は非推奨で、SAM はデプロイしません。同じ DayPlan 契約のテストは `backend/` に残しています。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。メニューは Notion ではなく DynamoDB です。
+本番 Lambda は [#23](https://github.com/tag0203/kintore-memo/issues/23) の `api/` です。画面の記録は `src/data/httpClient.ts`（[#12](https://github.com/tag0203/kintore-memo/issues/12)）、今日のメニューは `src/data/dayPlanClient.ts`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）です。メニューは Notion ではなく DynamoDB です。
 
 ## コスト
 
@@ -218,8 +217,7 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 - お気に入り、最近開いたページ、長い編集履歴、ジョブ状態
 - 上の「使わないもの」に挙げた固定費サービス
 - `src/` を `frontend/` へ移すこと
-- Cloudflare Pages / Workers を本番にすること（[#3](https://github.com/tag0203/kintore-memo/issues/3)、[#5](https://github.com/tag0203/kintore-memo/issues/5) は計画しない方針で閉じた）
-- Node `backend/` を本番に戻すこと（[#23](https://github.com/tag0203/kintore-memo/issues/23) で Go に寄せた。`worker/` も本番にはしない）
+- Cloudflare Pages / Workers を本番にすること（[#3](https://github.com/tag0203/kintore-memo/issues/3)、[#5](https://github.com/tag0203/kintore-memo/issues/5) は計画しない方針で閉じた。`worker/` は参考実装のまま）
 
 ## Issue
 
@@ -240,7 +238,7 @@ API の形は参考実装に揃えています。`worker/` は本番では呼び
 | [#7](https://github.com/tag0203/kintore-memo/issues/7) | この構成方針 |
 | [#8](https://github.com/tag0203/kintore-memo/issues/8) | SAM / CDK で最小の IaC |
 | [#9](https://github.com/tag0203/kintore-memo/issues/9) | Cognito と JWT Authorizer |
-| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（実装は Go の `api/` へ移した。Node `backend/` は非推奨） |
+| [#10](https://github.com/tag0203/kintore-memo/issues/10) | Lambda の Notion ラッパー API（実装は Go の `api/`） |
 | [#23](https://github.com/tag0203/kintore-memo/issues/23) | API を Go にする。フロントは React のまま。`worker/` は本番にしない |
 | [#11](https://github.com/tag0203/kintore-memo/issues/11) | DynamoDB のテーブル設計。[dynamodb.md](./dynamodb.md) |
 | [#12](https://github.com/tag0203/kintore-memo/issues/12) | 画面を API Gateway クライアントへ差し替える（`src/data/httpClient.ts`） |

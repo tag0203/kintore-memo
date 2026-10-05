@@ -2,7 +2,7 @@
 
 Issue [#8](https://github.com/tag0203/kintore-memo/issues/8) の最小 IaC 骨格です。方針は [architecture-aws.md](./architecture-aws.md) が正です。
 
-IaC は **AWS SAM** です（CDK にはしていません）。テンプレートは `infra/template.yaml`、本番 Lambda は Go の `api/` です。Node の `backend/` は非推奨で、このテンプレートはデプロイしません。SPA はリポジトリ直下のままです。
+IaC は **AWS SAM** です（CDK にはしていません）。テンプレートは `infra/template.yaml`、本番 Lambda は Go の `api/` です。SPA はリポジトリ直下のままです。
 
 ## この骨格が立てるもの
 
@@ -11,7 +11,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
-| Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` と Node `backend/` はデプロイしない |
+| Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |
@@ -34,9 +34,8 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 
 ```text
 src/                    SPA（既存）
-api/                    本番 Lambda（Go）。worker/ も Node backend/ も本番経路ではない
+api/                    本番 Lambda（Go）。worker/ は本番経路ではない
 worker/                 参考実装。本番経路にしない
-backend/                非推奨の Node Lambda（Notion と DayPlan の契約テスト）。SAM はデプロイしない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値

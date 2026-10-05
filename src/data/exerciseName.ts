@@ -1,5 +1,5 @@
 /**
- * DayPlan exercise names follow backend/dynamodb.mjs `normalizeExerciseName`:
+ * DayPlan exercise names follow docs/dynamodb.md and api/internal/ddb:
  * trimmed, at most 80 code points, no C0/DEL controls, no "#".
  * The picker still caps new names at 40 UTF-16 units.
  */
