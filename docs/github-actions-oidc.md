@@ -11,7 +11,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
 | `.github/workflows/deploy.yml` | Actions タブからの手動実行だけ | 下の変数が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化 |
 
-デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は `workflow_ref` でも `.github/workflows/deploy.yml` に限定します（`main` 上の別 workflow からの引き受けを防ぐ。直接起動の workflow では `workflow_ref` を使い、reusable workflow 向けの `job_workflow_ref` は使わない）。
+デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
 
 本番 API は Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。CI は `go test` と、そのバイナリを対象にした `sam build` を実行します。Cloudflare DNS（[#13](https://github.com/tag0203/kintore-memo/issues/13)）はこのワークフローの対象外です。
 
@@ -92,13 +92,15 @@ gh api repos/tag0203/kintore-memo/actions/oidc/customization/sub
 repo:tag0203@20207728/kintore-memo@1389679197:ref:refs/heads/main
 ```
 
-加えて `workflow_ref` を次に固定します。
+加えて AWS がマップする `workflow` を次に固定します（`.github/workflows/deploy.yml` の `name: Deploy`）。
 
 ```text
-tag0203/kintore-memo/.github/workflows/deploy.yml@refs/heads/main
+Deploy
 ```
 
-テンプレートの既定パラメータがこの値です。信頼は `StringEquals` でこの `sub`・`aud`・`workflow_ref` だけです。pull request、他ブランチ、他 workflow、GitHub Environment は一致しません。Environment を足すと `sub` が `repo:…:environment:名前` に変わるので、そのときはテンプレートを更新します。
+テンプレートの既定パラメータがこの値です。信頼は `StringEquals` でこの `sub`・`aud`・`workflow` だけです。pull request、他ブランチ、名前の違う workflow、GitHub Environment は一致しません。Environment を足すと `sub` が `repo:…:environment:名前` に変わるので、そのときはテンプレートを更新します。
+
+`workflow` はファイルパスではなく表示名です。同じ名前の別 workflow を `main` に置けば理論上は一致します。パス単位で縛るなら、GitHub の OIDC `sub` カスタマイズで `workflow_ref` を `sub` に含め、信頼条件の `sub` で照合してください（AWS は `workflow_ref` を単独の condition key としては公開していません）。
 
 名前だけの古い形式（`repo:tag0203/kintore-memo:ref:refs/heads/main`）では引き受けられません。
 

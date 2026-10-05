@@ -16,11 +16,12 @@ describe("GitHub OIDC bootstrap", () => {
     expect(template).toContain("iam:DeleteRolePermissionsBoundary");
   });
 
-  it("limits AssumeRole to main and the Deploy workflow file", () => {
-    expect(template).toContain("token.actions.githubusercontent.com:workflow_ref");
+  it("limits AssumeRole to main and the Deploy workflow name (AWS-mapped claim)", () => {
+    expect(template).toContain("token.actions.githubusercontent.com:workflow");
+    expect(template).not.toContain("token.actions.githubusercontent.com:workflow_ref");
     expect(template).not.toContain("token.actions.githubusercontent.com:job_workflow_ref");
-    expect(template).toContain("DeployWorkflowPath");
-    expect(template).toContain(".github/workflows/deploy.yml");
+    expect(template).toContain("DeployWorkflowName");
+    expect(template).toContain("Default: Deploy");
     expect(template).toContain("ref:refs/heads/${AllowedBranch}");
   });
 

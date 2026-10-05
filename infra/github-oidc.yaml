@@ -31,11 +31,13 @@ Parameters:
     Default: main
     AllowedPattern: "^[A-Za-z0-9._/-]+$"
     Description: Branch ref the deploy role will trust (workflow runs from main).
-  DeployWorkflowPath:
+  DeployWorkflowName:
     Type: String
-    Default: .github/workflows/deploy.yml
-    AllowedPattern: "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$"
-    Description: Only this workflow file may assume the deploy role (workflow_ref).
+    Default: Deploy
+    AllowedPattern: "^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,99}$"
+    Description: >
+      GitHub Actions workflow name claim (the name: field). AWS STS maps
+      token.actions.githubusercontent.com:workflow, not workflow_ref.
   CreateOidcProvider:
     Type: String
     Default: "true"
@@ -142,7 +144,7 @@ Resources:
               StringEquals:
                 "token.actions.githubusercontent.com:aud": sts.amazonaws.com
                 "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}"
-                "token.actions.githubusercontent.com:workflow_ref": !Sub "${GitHubOwner}/${GitHubRepo}/${DeployWorkflowPath}@refs/heads/${AllowedBranch}"
+                "token.actions.githubusercontent.com:workflow": !Ref DeployWorkflowName
       Policies:
         - PolicyName: GitHubDeploy
           PolicyDocument:
