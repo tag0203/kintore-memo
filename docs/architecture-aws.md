@@ -140,7 +140,7 @@ Notion の列名と型は README の「Notion の形」が正です。実デー�
 | ローカルの控え | `.env`（gitignore 済み）。コミットしない |
 | Actions から AWS へのデプロイ | OIDC ロール ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に置く。アクセスキーは Secrets に置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
-Lambda の IAM は、そのパラメータの `GetParameter` と、そのテーブル、自分のロググループに限定します。`npm run check:secrets` は、ブラウザ側と `dist/` に Notion のトークン類が無いことを確認するために残します。
+Lambda の IAM は、そのパラメータの `GetParameter` と、そのテーブル、自分のロググループに限定し、PermissionsBoundary（`kintore-memo-api-permissions-boundary`）で上限を固定します。`npm run check:secrets` は、ブラウザ側と `dist/` に加え、追跡ファイル全体のトークン値漏れも確認します。
 
 `worker/` を手元で試すときだけ、`npx wrangler secret put` を使います。本番の秘密の渡し方ではありません。
 

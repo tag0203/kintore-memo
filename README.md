@@ -25,11 +25,11 @@ npm run dev
 | --- | --- |
 | `npm run dev` | 開発サーバ |
 | `npm test` | 単体テストと、フロントにシークレットが無いことの確認 |
-| `npm run test:api` | Go API（`api/`）の単体テスト。Go 1.22 が要る |
+| `npm run test:api` | Go API（`api/`）の単体テスト。Go 1.26 が要る |
 | `npm run typecheck` | 画面・設定・Worker の型チェック |
 | `npm run build` | 静的ファイルを `dist/` へ出力（PWA のマニフェストと Service Worker を含む） |
 | `npm run preview` | ビルド結果を <http://localhost:4173> で確認 |
-| `npm run check:secrets` | ブラウザ側のソースと `dist/` に Notion のトークン類が無いことを確認 |
+| `npm run check:secrets` | ブラウザ側・`dist/` のトークン名漏れと、追跡ファイル全体の Notion トークン値漏れを確認 |
 
 Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記録は API Gateway 経由です。今日のメニュー・部位メモ・終了も `GET` / `PUT /api/day-plan` で DynamoDB に保存し、リロード後に復元します。保存先が無い初回は空のメニューです（シードの「脚」と 3 種目はモック用です）。どちらかが無いときはモックで、再読み込みすると記録もメニューも初期データに戻ります。
 

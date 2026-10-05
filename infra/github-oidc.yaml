@@ -3,6 +3,7 @@ Description: >
   Bootstrap IAM for GitHub Actions OIDC deploy (issue #14).
   Apply once from an admin principal in ap-northeast-1. Do not sam-deploy this from Actions.
   The app workflow assumes kintore-memo-gha-deploy and must not use access keys.
+  Also defines the PermissionsBoundary that app stacks must attach to kintore-memo-*-api.
 
 Parameters:
   GitHubOwner:
@@ -30,6 +31,11 @@ Parameters:
     Default: main
     AllowedPattern: "^[A-Za-z0-9._/-]+$"
     Description: Branch ref the deploy role will trust (workflow runs from main).
+  DeployWorkflowPath:
+    Type: String
+    Default: .github/workflows/deploy.yml
+    AllowedPattern: "^\\.github/workflows/[A-Za-z0-9._-]+\\.yml$"
+    Description: Only this workflow file may assume the deploy role (job_workflow_ref).
   CreateOidcProvider:
     Type: String
     Default: "true"
@@ -69,6 +75,52 @@ Resources:
         - Key: Purpose
           Value: github-actions-oidc
 
+  # Upper bound for Lambda execution roles named kintore-memo-*-api.
+  # Deploy role may create/update those roles only with this boundary attached.
+  # Widening past these actions requires an admin change to this bootstrap stack.
+  ApiFunctionPermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: kintore-memo-api-permissions-boundary
+      Description: Permissions boundary for kintore-memo-*-api Lambda roles.
+      Path: /
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: WriteOwnLogGroup
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api:*
+          - Sid: DynamoDBTableAccess
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+            Resource:
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-dev
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-staging
+              - !Sub arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/kintore-memo-prod
+          - Sid: ReadNotionSecureStrings
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/kintore-memo/*/notion/*
+          - Sid: DecryptSecureStringViaSsm
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+            Resource: !Sub arn:${AWS::Partition}:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/ssm
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+
   # Role name is fixed and does not match kintore-memo-*-api, so this role cannot edit itself.
   GitHubDeployRole:
     Type: AWS::IAM::Role
@@ -90,6 +142,7 @@ Resources:
               StringEquals:
                 "token.actions.githubusercontent.com:aud": sts.amazonaws.com
                 "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubOwner}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}"
+                "token.actions.githubusercontent.com:job_workflow_ref": !Sub "${GitHubOwner}/${GitHubRepo}/${DeployWorkflowPath}@refs/heads/${AllowedBranch}"
       Policies:
         - PolicyName: GitHubDeploy
           PolicyDocument:
@@ -195,22 +248,52 @@ Resources:
                 Condition:
                   StringEquals:
                     iam:PassedToService: lambda.amazonaws.com
-              - Sid: ManageApiFunctionRolesOnly
+              - Sid: ReadApiFunctionRoles
                 Effect: Allow
                 Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
                   - iam:GetRole
+                  - iam:ListRoleTags
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+              - Sid: CreateApiFunctionRoleWithBoundary
+                Effect: Allow
+                Action: iam:CreateRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref ApiFunctionPermissionsBoundary
+              - Sid: SetApiRolePermissionsBoundary
+                Effect: Allow
+                Action: iam:PutRolePermissionsBoundary
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref ApiFunctionPermissionsBoundary
+              - Sid: ManageBoundedApiFunctionRoles
+                Effect: Allow
+                Action:
+                  - iam:DeleteRole
                   - iam:UpdateRole
                   - iam:UpdateAssumeRolePolicy
                   - iam:TagRole
                   - iam:UntagRole
-                  - iam:ListRoleTags
                   - iam:PutRolePolicy
-                  - iam:GetRolePolicy
                   - iam:DeleteRolePolicy
-                  - iam:ListRolePolicies
                 Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref ApiFunctionPermissionsBoundary
+              - Sid: DenyStripApiRoleBoundary
+                Effect: Deny
+                Action: iam:DeleteRolePermissionsBoundary
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/kintore-memo-*-api
+              - Sid: ReadApiPermissionsBoundaryPolicy
+                Effect: Allow
+                Action:
+                  - iam:GetPolicy
+                  - iam:GetPolicyVersion
+                Resource: !Ref ApiFunctionPermissionsBoundary
               - Sid: ApiGatewayServiceLinkedRole
                 Effect: Allow
                 Action: iam:CreateServiceLinkedRole
@@ -341,6 +424,9 @@ Outputs:
   DeployRoleArn:
     Description: GitHub Actions variable AWS_DEPLOY_ROLE_ARN. Do not commit the value.
     Value: !GetAtt GitHubDeployRole.Arn
+  ApiFunctionPermissionsBoundaryArn:
+    Description: Attach this ARN as PermissionsBoundary on kintore-memo-*-api (infra/template.yaml).
+    Value: !Ref ApiFunctionPermissionsBoundary
   OidcProviderArn:
     Description: GitHub OIDC provider trusted by the deploy role.
     Value: !If

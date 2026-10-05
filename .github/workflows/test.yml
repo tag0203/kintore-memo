@@ -1,25 +1,35 @@
 # Go and npm tests. CI and OIDC deploy live in ci.yml and deploy.yml.
+# Action versions are pinned to full commit SHAs (mutable tags are not trusted).
 name: test
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
           cache: npm
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache-dependency-path: api/go.sum
       - run: npm ci
       - run: npm test
       - run: go test -C api ./...
+        env:
+          GOTOOLCHAIN: local
       - name: Compile the Lambda binary for arm64
+        env:
+          GOTOOLCHAIN: local
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -C api -o /tmp/bootstrap .
