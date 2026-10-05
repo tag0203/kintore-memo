@@ -3,6 +3,9 @@
 # Do not add AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY.
 # Do not use `set -x`, `sam deploy --debug`, or `aws --debug` — they can print credentials.
 # This workflow does not read SSM parameters.
+#
+# Build (sam build / npm ci / npm run build) runs in jobs without AWS credentials or
+# id-token: write. Only deploy-stack and publish-spa assume the OIDC role.
 
 name: Deploy
 
@@ -19,25 +22,22 @@ on:
           - staging
           - prod
 
-permissions:
-  id-token: write
-  contents: read
+# Job-level permissions only. Build jobs must not receive id-token: write.
+permissions: {}
 
 concurrency:
   group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: sam deploy and publish SPA
+  gate:
+    name: Check deploy role configuration
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      SAM_CLI_TELEMETRY: "0"
-      AWS_EC2_METADATA_DISABLED: "true"
-      AWS_PAGER: ""
-      AWS_REGION: ap-northeast-1
-      AWS_DEFAULT_REGION: ap-northeast-1
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      configured: ${{ steps.gate.outputs.configured }}
     steps:
       - name: Skip until the OIDC role exists
         id: gate
@@ -64,8 +64,89 @@ jobs:
           echo "configured=true" >> "$GITHUB_OUTPUT"
           echo "OIDC deploy role is configured. The role ARN is masked."
 
+  build:
+    name: sam build (no AWS credentials)
+    needs: gate
+    if: needs.gate.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      SAM_CLI_TELEMETRY: "0"
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+    steps:
       - name: Reject long-lived AWS keys
-        if: steps.gate.outputs.configured == 'true'
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "Build must not start with AWS credential environment variables."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: api/go.sum
+
+      - name: Setup SAM CLI
+        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
+        with:
+          use-installer: true
+          token: ${{ github.token }}
+
+      - name: sam build
+        working-directory: infra
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "sam build must not see AWS credentials."
+            exit 1
+          fi
+          sam build --template template.yaml
+
+      - name: Pack SAM build (preserve bootstrap executable bit)
+        run: |
+          set -euo pipefail
+          # upload-artifact zip restores files as 0644 and drops the executable bit.
+          # provided.al2023 requires bootstrap to be executable (Runtime.InvalidEntrypoint otherwise).
+          tar -C infra -czf /tmp/sam-build.tar.gz .aws-sam
+          tar -tzf /tmp/sam-build.tar.gz | grep -q 'build/ApiFunction/bootstrap$'
+
+      - name: Upload SAM build artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sam-build
+          path: /tmp/sam-build.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy-stack:
+    name: sam deploy
+    needs: [gate, build]
+    if: needs.gate.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      SAM_CLI_TELEMETRY: "0"
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_REGION: ap-northeast-1
+      AWS_DEFAULT_REGION: ap-northeast-1
+    steps:
+      - name: Reject long-lived AWS keys
         run: |
           set -euo pipefail
           if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
@@ -74,49 +155,46 @@ jobs:
           fi
 
       - name: Checkout
-        if: steps.gate.outputs.configured == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
-      - name: Setup Node.js
-        if: steps.gate.outputs.configured == 'true'
-        uses: actions/setup-node@v5
+      - name: Download SAM build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          node-version: 22
-          cache: npm
+          name: sam-build
+          path: /tmp
 
-      - name: Setup Go
-        if: steps.gate.outputs.configured == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: api/go.sum
+      - name: Unpack SAM build
+        run: |
+          set -euo pipefail
+          tar -C infra -xzf /tmp/sam-build.tar.gz
+          if [ ! -x infra/.aws-sam/build/ApiFunction/bootstrap ]; then
+            echo "bootstrap is missing or not executable after unpack. Refusing to deploy."
+            ls -la infra/.aws-sam/build/ApiFunction/ || true
+            exit 1
+          fi
 
       - name: Setup SAM CLI
-        if: steps.gate.outputs.configured == 'true'
-        uses: aws-actions/setup-sam@v3
+        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
         with:
           use-installer: true
           token: ${{ github.token }}
 
       - name: Configure AWS credentials
-        if: steps.gate.outputs.configured == 'true'
-        uses: aws-actions/configure-aws-credentials@v6
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-1
-          role-session-name: gha-kintore-memo
+          role-session-name: gha-kintore-memo-deploy
           mask-aws-account-id: true
           output-credentials: false
           output-env-credentials: true
 
-      - name: sam build and deploy
-        if: steps.gate.outputs.configured == 'true'
+      - name: sam deploy
         working-directory: infra
         env:
           ENVIRONMENT: ${{ inputs.environment }}
-          GOTOOLCHAIN: local
         run: |
           set -euo pipefail
           case "${ENVIRONMENT}" in
@@ -126,7 +204,6 @@ jobs:
               exit 1
               ;;
           esac
-          sam build --template template.yaml
           sam deploy \
             --template-file .aws-sam/build/template.yaml \
             --region ap-northeast-1 \
@@ -138,8 +215,7 @@ jobs:
             --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14"
           echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
 
-      - name: Build SPA from stack outputs
-        if: steps.gate.outputs.configured == 'true'
+      - name: Export public stack outputs for SPA build
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
@@ -163,40 +239,93 @@ jobs:
           CLIENT_ID="$(read_output UserPoolClientId)"
           API_URL="$(read_output HttpApiUrl)"
           API_URL="${API_URL%/}"
+          SPA_BUCKET="$(read_output SpaBucketName)"
+          DIST_ID="$(read_output CloudFrontDistributionId)"
           if ! [[ "${USER_POOL_ID}" =~ ^ap-northeast-1_[A-Za-z0-9]+$ ]]; then
-            echo "Refusing to build: UserPoolId did not match the Cognito pool id pattern."
+            echo "Refusing to continue: UserPoolId did not match the Cognito pool id pattern."
             exit 1
           fi
           if ! [[ "${CLIENT_ID}" =~ ^[A-Za-z0-9]+$ ]]; then
-            echo "Refusing to build: UserPoolClientId did not match the app client id pattern."
+            echo "Refusing to continue: UserPoolClientId did not match the app client id pattern."
             exit 1
           fi
           if ! [[ "${API_URL}" =~ ^https://[a-z0-9]+\.execute-api\.ap-northeast-1\.amazonaws\.com/${ENVIRONMENT}$ ]]; then
-            echo "Refusing to build: HttpApiUrl did not match the HTTP API URL pattern."
+            echo "Refusing to continue: HttpApiUrl did not match the HTTP API URL pattern."
             exit 1
           fi
-          # Public stack outputs only. Do not print them; they are embedded in dist/.
-          export VITE_COGNITO_REGION=ap-northeast-1
-          export VITE_COGNITO_USER_POOL_ID="${USER_POOL_ID}"
-          export VITE_COGNITO_CLIENT_ID="${CLIENT_ID}"
-          export VITE_API_BASE_URL="${API_URL}"
-          npm ci
-          npm run build
-          npm run check:secrets
-          if ! grep -R -q -F -- "${USER_POOL_ID}" dist/ \
-            || ! grep -R -q -F -- "${CLIENT_ID}" dist/ \
-            || ! grep -R -q -F -- "${API_URL}" dist/; then
-            echo "Build output is missing the public Cognito or API settings. Refusing to publish."
+          if ! [[ "${SPA_BUCKET}" =~ ^kintore-memo-${ENVIRONMENT}-spa-[0-9]{12}$ ]]; then
+            echo "Refusing to continue: SpaBucketName did not match kintore-memo-${ENVIRONMENT}-spa-<account>."
             exit 1
           fi
-          echo "SPA build embedded the public Cognito and API settings for ${ENVIRONMENT}."
+          if ! [[ "${DIST_ID}" =~ ^E[A-Z0-9]+$ ]]; then
+            echo "Refusing to continue: CloudFront distribution id did not match the expected pattern."
+            exit 1
+          fi
+          mkdir -p /tmp/spa-publish
+          # Public Cognito / API / publish targets only. No SSM values.
+          {
+            echo "VITE_COGNITO_REGION=ap-northeast-1"
+            echo "VITE_COGNITO_USER_POOL_ID=${USER_POOL_ID}"
+            echo "VITE_COGNITO_CLIENT_ID=${CLIENT_ID}"
+            echo "VITE_API_BASE_URL=${API_URL}"
+            echo "SPA_BUCKET=${SPA_BUCKET}"
+            echo "CLOUDFRONT_DISTRIBUTION_ID=${DIST_ID}"
+            echo "ENVIRONMENT=${ENVIRONMENT}"
+          } > /tmp/spa-publish/env.txt
 
-      - name: Publish SPA
-        if: steps.gate.outputs.configured == 'true'
-        env:
-          ENVIRONMENT: ${{ inputs.environment }}
+      - name: Upload SPA publish inputs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: spa-publish-env
+          path: /tmp/spa-publish/env.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  build-spa:
+    name: Build SPA (no AWS credentials)
+    needs: [gate, deploy-stack]
+    if: needs.gate.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Reject long-lived AWS keys
         run: |
           set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "SPA build must not start with AWS credential environment variables."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Download SPA publish inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: spa-publish-env
+          path: /tmp/spa-publish
+
+      - name: Build SPA from public stack outputs
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "npm build must not see AWS credentials."
+            exit 1
+          fi
+          set -a
+          # shellcheck disable=SC1091
+          source /tmp/spa-publish/env.txt
+          set +a
           case "${ENVIRONMENT}" in
             dev|staging|prod) ;;
             *)
@@ -204,28 +333,107 @@ jobs:
               exit 1
               ;;
           esac
-          STACK="kintore-memo-${ENVIRONMENT}"
-          SPA_BUCKET="$(aws cloudformation describe-stacks \
-            --region ap-northeast-1 \
-            --stack-name "${STACK}" \
-            --query "Stacks[0].Outputs[?OutputKey=='SpaBucketName'].OutputValue" \
-            --output text)"
-          DIST_ID="$(aws cloudformation describe-stacks \
-            --region ap-northeast-1 \
-            --stack-name "${STACK}" \
-            --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" \
-            --output text)"
+          if ! [[ "${VITE_COGNITO_USER_POOL_ID}" =~ ^ap-northeast-1_[A-Za-z0-9]+$ ]]; then
+            echo "Refusing to build: UserPoolId did not match the Cognito pool id pattern."
+            exit 1
+          fi
+          if ! [[ "${VITE_COGNITO_CLIENT_ID}" =~ ^[A-Za-z0-9]+$ ]]; then
+            echo "Refusing to build: UserPoolClientId did not match the app client id pattern."
+            exit 1
+          fi
+          if ! [[ "${VITE_API_BASE_URL}" =~ ^https://[a-z0-9]+\.execute-api\.ap-northeast-1\.amazonaws\.com/${ENVIRONMENT}$ ]]; then
+            echo "Refusing to build: HttpApiUrl did not match the HTTP API URL pattern."
+            exit 1
+          fi
+          npm ci
+          npm run build
+          npm run check:secrets
+          if ! grep -R -q -F -- "${VITE_COGNITO_USER_POOL_ID}" dist/ \
+            || ! grep -R -q -F -- "${VITE_COGNITO_CLIENT_ID}" dist/ \
+            || ! grep -R -q -F -- "${VITE_API_BASE_URL}" dist/; then
+            echo "Build output is missing the public Cognito or API settings. Refusing to publish."
+            exit 1
+          fi
+          echo "SPA build embedded the public Cognito and API settings for ${ENVIRONMENT}."
+
+      - name: Upload SPA dist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: spa-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-spa:
+    name: Publish SPA to S3 and invalidate CloudFront
+    needs: [gate, build-spa]
+    if: needs.gate.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_EC2_METADATA_DISABLED: "true"
+      AWS_PAGER: ""
+      AWS_REGION: ap-northeast-1
+      AWS_DEFAULT_REGION: ap-northeast-1
+    steps:
+      - name: Reject long-lived AWS keys
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "This job started with AWS credential environment variables. OIDC does not use long-lived keys."
+            exit 1
+          fi
+
+      - name: Download SPA publish inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: spa-publish-env
+          path: /tmp/spa-publish
+
+      - name: Download SPA dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: spa-dist
+          path: dist/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-1
+          role-session-name: gha-kintore-memo-publish
+          mask-aws-account-id: true
+          output-credentials: false
+          output-env-credentials: true
+
+      - name: Publish SPA
+        run: |
+          set -euo pipefail
+          set -a
+          # shellcheck disable=SC1091
+          source /tmp/spa-publish/env.txt
+          set +a
+          case "${ENVIRONMENT}" in
+            dev|staging|prod) ;;
+            *)
+              echo "Unsupported environment."
+              exit 1
+              ;;
+          esac
           if ! [[ "${SPA_BUCKET}" =~ ^kintore-memo-${ENVIRONMENT}-spa-[0-9]{12}$ ]]; then
             echo "Refusing to sync: SpaBucketName did not match kintore-memo-${ENVIRONMENT}-spa-<account>."
             exit 1
           fi
-          if ! [[ "${DIST_ID}" =~ ^E[A-Z0-9]+$ ]]; then
+          if ! [[ "${CLOUDFRONT_DISTRIBUTION_ID}" =~ ^E[A-Z0-9]+$ ]]; then
             echo "Refusing to invalidate: CloudFront distribution id did not match the expected pattern."
             exit 1
           fi
           aws s3 sync dist/ "s3://${SPA_BUCKET}/" --delete --only-show-errors --region ap-northeast-1
           INVALIDATION_ID="$(aws cloudfront create-invalidation \
-            --distribution-id "${DIST_ID}" \
+            --distribution-id "${CLOUDFRONT_DISTRIBUTION_ID}" \
             --paths "/*" \
             --query "Invalidation.Id" \
             --output text)"

@@ -92,6 +92,26 @@ describe("secret check", () => {
     }
   });
 
+  it("rejects Notion token values even under api/ and infra/", () => {
+    const fakeToken = "ntn_" + "a".repeat(24);
+    const root = writeTree({
+      "api/main.go": `const leaked = "${fakeToken}"\n`,
+      "infra/notes.txt": `token=${fakeToken}\n`,
+      "src/app.ts": "export const label = 'スクワット';\n",
+    });
+    try {
+      const failures = findLeaks(root, {
+        tracked: new Set(["api/main.go", "infra/notes.txt", "src/app.ts"]),
+      });
+      expect(failures.some((line) => line.includes("api/main.go") && line.includes("ntn_"))).toBe(true);
+      expect(failures.some((line) => line.includes("infra/notes.txt") && line.includes("ntn_"))).toBe(
+        true,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a screen import of the worker reference", () => {
     const root = writeTree({
       "src/app.ts": "import { handleRequest } from \"../worker/index.ts\";\n",

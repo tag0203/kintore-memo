@@ -1,12 +1,12 @@
 # CI always runs. It does not deploy and does not use AWS credentials.
 # Deploy is .github/workflows/deploy.yml (manual, OIDC, no-op until the role exists).
+# Action versions are pinned to full commit SHAs (mutable tags are not trusted).
 
 name: CI
 
 on:
   pull_request:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -23,20 +23,20 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache-dependency-path: api/go.sum
 
       - name: Install dependencies
@@ -74,7 +74,7 @@ jobs:
       AWS_EC2_METADATA_DISABLED: "true"
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
@@ -91,21 +91,21 @@ jobs:
 
       - name: Setup Node.js
         if: steps.sam.outputs.present == 'true'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
           cache: npm
 
       - name: Setup Go
         if: steps.sam.outputs.present == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache-dependency-path: api/go.sum
 
       - name: Setup SAM CLI
         if: steps.sam.outputs.present == 'true'
-        uses: aws-actions/setup-sam@v3
+        uses: aws-actions/setup-sam@89ddb14d60e682855e3fea4be85b3c56485de310 # v3
         with:
           use-installer: true
           token: ${{ github.token }}
@@ -114,10 +114,11 @@ jobs:
         if: steps.sam.outputs.present == 'true'
         run: |
           set -euo pipefail
+          CFN_LINT_VERSION=1.57.1
           if command -v pipx >/dev/null 2>&1; then
-            pipx install cfn-lint
+            pipx install "cfn-lint==${CFN_LINT_VERSION}"
           else
-            python3 -m pip install --user cfn-lint
+            python3 -m pip install --user "cfn-lint==${CFN_LINT_VERSION}"
           fi
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 

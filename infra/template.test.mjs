@@ -43,6 +43,12 @@ describe("ApiFunction runtime", () => {
     expect(template).not.toContain("CodeUri: ../backend/");
     expect(template).not.toContain("CodeUri: ../worker/");
   });
+
+  it("forces the fixed PermissionsBoundary on the API role", () => {
+    expect(template).toContain(
+      "PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/kintore-memo-api-permissions-boundary",
+    );
+  });
 });
 
 describe("HttpApi CORS", () => {

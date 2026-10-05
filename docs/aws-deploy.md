@@ -25,7 +25,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 - AWS CLI v2（デプロイするアカウントにサインイン済み）
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Docker（`sam local` 用）
-- Go 1.22（`sam build` が `api/` を `bootstrap` にコンパイルする。Lambda は `provided.al2023` / arm64）
+- Go 1.26（`sam build` が `api/` を `bootstrap` にコンパイルする。Lambda は `provided.al2023` / arm64）
 - Node.js 22（ローカルの SPA。Lambda ランタイムではない）
 
 リージョンの既定は `ap-northeast-1` です（`infra/samconfig.toml`）。
@@ -39,7 +39,7 @@ worker/                 参考実装。本番経路にしない
 infra/
   template.yaml         SAM テンプレート
   samconfig.toml        sam deploy の既定値
-  github-oidc.yaml      Actions 用 OIDC ロール（bootstrap。Actions からは適用しない）
+  github-oidc.yaml      Actions 用 OIDC ロールと API 用 PermissionsBoundary（bootstrap。Actions からは適用しない）
 docs/
   architecture-aws.md
   aws-auth.md           Cognito ログイン（#9）
@@ -52,6 +52,8 @@ docs/
 ## デプロイ（1 環境）
 
 秘密を git に置かないでください。SSM の値もリポジトリに書かないでください。
+
+API ロールは PermissionsBoundary（OIDC ブートストラップが作る `kintore-memo-api-permissions-boundary`）必須です。まだなら先に [github-actions-oidc.md](./github-actions-oidc.md) の手順で `infra/github-oidc.yaml` を適用してください。
 
 ```bash
 # 1. テンプレート検証

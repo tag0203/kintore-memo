@@ -153,10 +153,13 @@ Resources:
       RetentionInDays: !Ref LogRetentionDays
 
   # Explicit role so SAM does not attach AWSLambdaBasicExecutionRole (logs:* on *).
+  # PermissionsBoundary is created by infra/github-oidc.yaml (admin bootstrap). Deploy
+  # cannot create or widen this role without that fixed boundary.
   ApiFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub ${ProjectName}-${Environment}-api
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/kintore-memo-api-permissions-boundary
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

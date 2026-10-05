@@ -4,7 +4,19 @@ import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
-const banned = [/NOTION_TOKEN/, /NOTION_DATABASE_ID/, /api\.notion\.com/, /VITE_NOTION/, /ntn_[A-Za-z0-9]/, /secret_[A-Za-z0-9]/];
+
+/** Browser / SPA leak patterns (names and hosts). Not applied under api/infra/docs/… */
+const banned = [/NOTION_TOKEN/, /NOTION_DATABASE_ID/, /api\.notion\.com/, /VITE_NOTION/, /ntn_[A-Za-z0-9]+/, /secret_[A-Za-z0-9]+/];
+
+/**
+ * Real credential *values* scanned across every tracked file (including api/infra).
+ * Config variable names alone must not match these.
+ */
+const secretValuePatterns = [
+  { label: "ntn_ token value", pattern: /\bntn_[A-Za-z0-9]{20,}\b/ },
+  { label: "secret_ token value", pattern: /\bsecret_[A-Za-z0-9]{20,}\b/ },
+];
+
 const allowed = new Set(["README.md", ".env.example", "wrangler.toml", "scripts/check-secrets.mjs"]);
 const skipDirNames = new Set(["node_modules", ".git", ".wrangler", ".aws-sam", "coverage", "dev-dist"]);
 
@@ -12,7 +24,7 @@ function rel(root, path) {
   return relative(root, path).split("\\").join("/");
 }
 
-function isAllowed(path) {
+function isBrowserExempt(path) {
   return (
     path.startsWith("worker/") ||
     path.startsWith("api/") ||
@@ -40,6 +52,12 @@ function readTracked(root) {
   }
 }
 
+function scanSecretValues(text, pathRel, failures) {
+  for (const { label, pattern } of secretValuePatterns) {
+    if (pattern.test(text)) failures.push(`${pathRel} に ${label} があります`);
+  }
+}
+
 /**
  * @param {string} root
  * @param {{ tracked?: Set<string> | null }} [options]
@@ -49,13 +67,13 @@ export function findLeaks(root, options = {}) {
   const tracked = options.tracked === undefined ? readTracked(root) : options.tracked;
   const failures = [];
 
-  function walk(path, { inspectUntrackedEnv }) {
+  function walk(path, { inspectUntrackedEnv, scanValuesEverywhere }) {
     const info = statSync(path);
     if (info.isDirectory()) {
       for (const entry of readdirSync(path)) {
         if (skipDirNames.has(entry)) continue;
         if (entry === "dist" && path === root) continue;
-        walk(join(path, entry), { inspectUntrackedEnv });
+        walk(join(path, entry), { inspectUntrackedEnv, scanValuesEverywhere });
       }
       return;
     }
@@ -81,17 +99,24 @@ export function findLeaks(root, options = {}) {
     ) {
       failures.push(`${pathRel} が Worker を import しています`);
     }
-    if (isAllowed(pathRel)) return;
+
+    // Value-shaped secrets: every path under the walk (tracked tree + dist).
+    if (scanValuesEverywhere) {
+      scanSecretValues(text, pathRel, failures);
+    }
+
+    // Browser/SPA name+host patterns: skip api/infra/docs/worker.
+    if (isBrowserExempt(pathRel)) return;
     for (const pattern of banned) {
       if (pattern.test(text)) failures.push(`${pathRel} に ${pattern} があります`);
     }
   }
 
-  walk(root, { inspectUntrackedEnv: false });
+  walk(root, { inspectUntrackedEnv: false, scanValuesEverywhere: true });
 
   const dist = join(root, "dist");
   if (existsSync(dist) && statSync(dist).isDirectory()) {
-    walk(dist, { inspectUntrackedEnv: true });
+    walk(dist, { inspectUntrackedEnv: true, scanValuesEverywhere: true });
   }
 
   return failures;
