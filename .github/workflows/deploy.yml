@@ -120,7 +120,17 @@ jobs:
           # upload-artifact zip restores files as 0644 and drops the executable bit.
           # provided.al2023 requires bootstrap to be executable (Runtime.InvalidEntrypoint otherwise).
           tar -C infra -czf /tmp/sam-build.tar.gz .aws-sam
-          tar -tzf /tmp/sam-build.tar.gz | grep -q 'build/ApiFunction/bootstrap$'
+          # Do not pipe tar into grep -q. grep -q exits on the first match and closes
+          # the pipe; GNU tar then exits 2 with "stdout: write error", and pipefail
+          # fails the step even when the archive contains bootstrap.
+          tar -tvzf /tmp/sam-build.tar.gz > /tmp/sam-build.list
+          # Owner execute bit is the 4th mode character. Require a regular file so a
+          # directory named bootstrap cannot satisfy the check.
+          if ! grep -E -q -- '^-..x.*build/ApiFunction/bootstrap$' /tmp/sam-build.list; then
+            echo "bootstrap is missing from the SAM archive or is not executable."
+            grep 'ApiFunction' /tmp/sam-build.list || true
+            exit 1
+          fi
 
       - name: Upload SAM build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
