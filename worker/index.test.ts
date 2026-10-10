@@ -122,6 +122,36 @@ describe("worker HTTP API", () => {
     expect(created).toBe(0);
   });
 
+  it("hides notion and configuration details", async () => {
+    const notionId = "a1b2c3d4-e5f6-4789-a123-ef1234567890";
+    const upstream = await handleRequest(new Request("https://app.example/api/exercises"), {}, {
+      createClient: () =>
+        client({
+          async listExercises() {
+            throw new Error(`Notion API: missing database ${notionId} https://example.invalid/db/${notionId}`);
+          },
+        }),
+    });
+    expect(upstream.status).toBe(502);
+    const upstreamText = await upstream.text();
+    expect(upstreamText).toContain("Notion との通信に失敗しました");
+    expect(upstreamText).not.toContain(notionId);
+    expect(upstreamText).not.toContain("example.invalid");
+
+    const missing = await handleRequest(new Request("https://app.example/api/exercises"), {}, {
+      createClient: () =>
+        client({
+          async listExercises() {
+            throw new Error("NOTION_TOKEN が設定されていません");
+          },
+        }),
+    });
+    expect(missing.status).toBe(500);
+    const missingText = await missing.text();
+    expect(missingText).toContain("サーバーでエラーが発生しました");
+    expect(missingText).not.toContain("NOTION_TOKEN");
+  });
+
   it("rejects an unknown route", async () => {
     const response = await handleRequest(new Request("https://app.example/secret"), {});
     expect(response.status).toBe(404);

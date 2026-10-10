@@ -97,4 +97,70 @@ describe("createHttpDayPlanClient", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("hides upstream text on a storage failure and shows requestId", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: "arn:aws:dynamodb:ap-northeast-1:123456789012:table/App",
+              message: "https://example.invalid/a1b2c3d4-e5f6-4789-a123-ef1234567890",
+              requestId: "K1x7Ejy1iYcEJew=",
+            }),
+            { status: 502 },
+          ),
+      ),
+    );
+    try {
+      await client().load("2026-10-02");
+      expect.fail("expected an error");
+    } catch (error) {
+      expect(error).toBeInstanceOf(DayPlanRequestError);
+      const fault = error as DayPlanRequestError;
+      expect(fault.message).toBe("メニューの保存先に接続できませんでした（K1x7Ejy1iYcEJew=）");
+      expect(fault.code).toBe("storage");
+      expect(fault.message).not.toContain("arn:");
+      expect(fault.message).not.toContain("123456789012");
+      expect(fault.message).not.toContain("example.invalid");
+      expect(fault.code).not.toContain("arn:");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not append an ARN, account id, token, or Notion id supplied as requestId", async () => {
+    for (const requestId of [
+      "arn:aws:iam::123456789012:root",
+      "123456789012",
+      "ntn_" + "secretvalue",
+      "secret_" + "ABC123456",
+      "a1b2c3d4e5f64789a123ef1234567890",
+      "a1b2c3d4-e5f6-4789-a123-ef1234567890",
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({ error: "storage", message: "raw", requestId }),
+              { status: 502 },
+            ),
+        ),
+      );
+      try {
+        await client().load("2026-10-02");
+        expect.fail("expected an error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(DayPlanRequestError);
+        const fault = error as DayPlanRequestError;
+        expect(fault.message).toBe("メニューの保存先に接続できませんでした");
+        expect(fault.message).not.toContain("arn:");
+        expect(fault.message).not.toContain("123456789012");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
 });

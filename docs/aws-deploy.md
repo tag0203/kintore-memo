@@ -133,7 +133,7 @@ curl -sS "${API_URL}/api/health"
 # {"ok":true,"service":"kintore-memo","stage":"dev","notionConfigured":true,"tableName":"kintore-memo-dev"}
 ```
 
-`notionConfigured` は秘密の中身ではなく、トークンの置き場（環境変数か SSM 名）があることだけを示します。`/api/health` 以外は JWT が無いと 401 です。認証後の Notion ルートは、SSM に値があれば 200、設定が無ければ 500、Notion が拒否すれば 502 です。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成と自前ログインフォームの手順は [aws-auth.md](./aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。
+`notionConfigured` は秘密の中身ではなく、トークンの置き場（環境変数か SSM 名）があることだけを示します。`/api/health` 以外は JWT が無いと 401 です。認証後の Notion ルートは、SSM に値があれば 200、設定が無ければ 500、Notion が拒否すれば 502 です。500 と 502 の本文は固定の日本語と API Gateway の `requestId` だけで、Notion や AWS の生エラーは返しません。UUID は応答に入れず、Lambda のリクエスト ID は CloudWatch に残します。User Pool は自己登録を禁止しているので、利用するユーザーは管理者が `AdminCreateUser` で作ります。作成と自前ログインフォームの手順は [aws-auth.md](./aws-auth.md)（[#9](https://github.com/tag0203/kintore-memo/issues/9)）です。
 
 ## ローカル（sam local）
 

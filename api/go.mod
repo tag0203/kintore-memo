@@ -9,6 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.18.8
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.42.4
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.59.0
+	github.com/aws/smithy-go v1.22.2
 )
 
 require (
@@ -24,5 +25,4 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.25.3 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.30.1 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.19 // indirect
-	github.com/aws/smithy-go v1.22.2 // indirect
 )

@@ -118,7 +118,7 @@ Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `
 | GET | `/api/day-plan?date=YYYY-MM-DD` | 強い整合性の `GetItem`（`dayPlanKey(sub, date)`）と `readDayPlanItem`。項目が無ければ `memo: ""`、`exercises: []`、`finished: false`、`updatedAt: null`。シードの「脚」と 3 種目は返さない |
 | PUT | `/api/day-plan` | 本文の `date` / `memo` / `exercises` / `finished` を `buildDayPlanItem` に渡し、`PutItem` で項目ごと置き換える。`userId` は本文ではなく JWT の `sub` |
 
-`date` は画面のセッション日付のままです。東京の当日・前日・翌日以外は 400 `date_window` です。`sub` が無い、または UUID でないときは 401 です。`TABLE_NAME` が無いときは 503 です。保存済み項目が契約と違うときは 502 です。空の `memo`、空の `exercises`、`finished: false` は、属性が保存されていれば有効です。属性そのものが無い項目は 502 です。
+`date` は画面のセッション日付のままです。東京の当日・前日・翌日以外は 400 `date_window` です。`sub` が無い、または UUID でないときは 401 です。`TABLE_NAME` が無いときは 503 です。保存済み項目が契約と違うときは 502 で、`error` は `storage`、`message` は固定文言です。DynamoDB の生エラーは返さず、`requestId` が付くことがあります。空の `memo`、空の `exercises`、`finished: false` は、属性が保存されていれば有効です。属性そのものが無い項目は 502 です。
 
 応答は画面のセッションと同じ 5 フィールドです（`date` / `memo` / `exercises` / `finished` / `updatedAt`）。`pk` や `ttl` は返しません。未保存の GET の `updatedAt` は `null` です。重量・回数・セット・きつさが本文にあっても項目には書きません。
 

@@ -1,14 +1,22 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/aws/smithy-go"
 
 	"github.com/tag0203/kintore-memo/api/internal/cache"
 	"github.com/tag0203/kintore-memo/api/internal/dayplan"
@@ -82,6 +90,9 @@ func (f *fakeBackend) GetLogOnDate(context.Context, string, string) ([]model.Exe
 func (f *fakeBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
 	f.created++
 	f.calls = append(f.calls, "create")
+	if f.fail != nil {
+		return model.ExerciseLog{}, f.fail
+	}
 	created := squat
 	created.ID = "new"
 	created.Exercise = input.Exercise
@@ -185,7 +196,7 @@ func TestCreateLogValidationAndBase64(t *testing.T) {
 	h := testHandler(backend, nil, nil)
 	bad := `{"exercise":"スクワット","weightKg":-20,"reps":11,"sets":3,"difficulty":3,"date":"2026-10-02"}`
 	res, _ := h.Handle(context.Background(), httpEvent("POST", "/dev/api/logs", "dev", "", bad, false))
-	if res.StatusCode != 400 || backend.created != 0 {
+	if res.StatusCode != 400 || backend.created != 0 || strings.Contains(res.Body, "requestId") {
 		t.Fatalf("invalid %d created %d %s", res.StatusCode, backend.created, res.Body)
 	}
 
@@ -207,19 +218,157 @@ func TestCreateLogValidationAndBase64(t *testing.T) {
 func TestMissingConfigAndRedaction(t *testing.T) {
 	h := New(Deps{Env: map[string]string{}})
 	missing, _ := h.Handle(context.Background(), httpEvent("GET", "/dev/api/exercises", "dev", "", "", false))
-	if missing.StatusCode != 500 || !strings.Contains(missing.Body, "設定がありません") {
+	if missing.StatusCode != 500 || !strings.Contains(missing.Body, msgServer) || strings.Contains(missing.Body, "設定がありません") {
 		t.Fatalf("missing %d %s", missing.StatusCode, missing.Body)
 	}
 	unknown, _ := h.Handle(context.Background(), httpEvent("GET", "/dev/api/unknown", "dev", "", "", false))
 	if unknown.StatusCode != 404 {
 		t.Fatalf("unknown %d %s", unknown.StatusCode, unknown.Body)
 	}
+}
 
-	backend := &fakeBackend{fail: errString("Notion API: unauthorized ntn_secretvalue")}
-	h = testHandler(backend, nil, nil)
-	res, _ := h.Handle(context.Background(), httpEvent("GET", "/api/exercises", "$default", "", "", false))
-	if res.StatusCode != 502 || strings.Contains(res.Body, "ntn_secretvalue") || !strings.Contains(res.Body, "[redacted]") {
-		t.Fatalf("redact %d %s", res.StatusCode, res.Body)
+func TestUpstreamErrorsDoNotLeak(t *testing.T) {
+	const (
+		account  = "123456789012"
+		notionID = "a1b2c3d4-e5f6-4789-a123-ef1234567890"
+		bareID   = "a1b2c3d4e5f64789a123ef1234567890"
+		token    = "ntn_secretvalue"
+		marker   = "body-marker-do-not-log"
+	)
+	roleARN := "arn:aws:sts::" + account + ":assumed-role/kintore-memo-dev-api/fn"
+	paramARN := "arn:aws:ssm:ap-northeast-1:" + account + ":parameter/kintore/notion-token"
+	pageURL := "https://api.notion.com/v1/databases/" + notionID
+	leaks := []string{account, notionID, bareID, token, roleARN, paramARN, pageURL, "Bearer " + token, marker}
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	assertSafe := func(t *testing.T, status int, body, public, requestID, typeName string) {
+		t.Helper()
+		if status != 0 && !strings.Contains(body, fmt.Sprintf(`"error":"%s"`, public)) {
+			t.Fatalf("public message missing from %s", body)
+		}
+		if requestID != "" && !strings.Contains(body, requestID) {
+			t.Fatalf("requestId missing from %s", body)
+		}
+		assertNoLeak(t, body, leaks)
+		logged := logs.String()
+		if !strings.Contains(logged, typeName) || !strings.Contains(logged, public) || !strings.Contains(logged, "[redacted]") {
+			t.Fatalf("log = %s", logged)
+		}
+		assertNoLeak(t, logged, leaks)
+	}
+
+	t.Run("ssm access denied", func(t *testing.T) {
+		logs.Reset()
+		h := New(Deps{
+			LoadSecrets: func(context.Context, func(string) string) (secrets.Pair, error) {
+				return secrets.Pair{}, &smithy.OperationError{
+					ServiceID:     "SSM",
+					OperationName: "GetParameter",
+					Err: &smithy.GenericAPIError{
+						Code: "AccessDeniedException",
+						Message: fmt.Sprintf(
+							"User: %s is not authorized to perform: ssm:GetParameter on resource: %s account %s token %s",
+							roleARN, paramARN, account, token,
+						),
+					},
+				}
+			},
+		})
+		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
+		event.RequestContext.RequestID = "ZoG1fH0oIAMEjeg="
+		event.Headers = map[string]string{"authorization": "Bearer " + token}
+		ctx := lambdacontext.NewContext(context.Background(), &lambdacontext.LambdaContext{AwsRequestID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
+		res, err := h.Handle(ctx, event)
+		if err != nil || res.StatusCode != 502 {
+			t.Fatalf("ssm %d %v %s", res.StatusCode, err, res.Body)
+		}
+		if strings.Contains(res.Body, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda uuid was returned: %s", res.Body)
+		}
+		if !strings.Contains(logs.String(), "lambdaRequestId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda id missing from log: %s", logs.String())
+		}
+		assertSafe(t, res.StatusCode, res.Body, msgServer, "ZoG1fH0oIAMEjeg=", "*smithy.OperationError")
+	})
+
+	t.Run("notion 404", func(t *testing.T) {
+		logs.Reset()
+		message := fmt.Sprintf(
+			"Notion API: Could not find database with ID: %s. See %s token %s bare %s",
+			notionID, pageURL, token, bareID,
+		)
+		h := testHandler(&fakeBackend{fail: errString(message)}, nil, nil)
+		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
+		event.RequestContext.RequestID = "K1x7Ejy1iYcEJew="
+		res, err := h.Handle(context.Background(), event)
+		if err != nil || res.StatusCode != 502 {
+			t.Fatalf("notion %d %v %s", res.StatusCode, err, res.Body)
+		}
+		assertSafe(t, res.StatusCode, res.Body, msgNotion, "K1x7Ejy1iYcEJew=", "httpapi.errString")
+	})
+
+	t.Run("network url", func(t *testing.T) {
+		logs.Reset()
+		cause := &url.Error{
+			Op:  "Get",
+			URL: pageURL,
+			Err: errors.New("dial tcp: lookup api.notion.com: no such host token " + token + " id " + notionID),
+		}
+		h := testHandler(&fakeBackend{fail: cause}, nil, nil)
+		body := fmt.Sprintf(
+			`{"exercise":"スクワット","weightKg":80,"reps":8,"sets":3,"difficulty":3,"date":"2026-10-02","title":"%s"}`,
+			marker,
+		)
+		event := httpEvent("POST", "/api/logs", "$default", "", body, false)
+		event.RequestContext.RequestID = "VJ6r1Gq1iYcEJ9A="
+		event.Headers = map[string]string{"authorization": "Bearer " + token}
+		res, err := h.Handle(context.Background(), event)
+		if err != nil || res.StatusCode != 502 {
+			t.Fatalf("url %d %v %s", res.StatusCode, err, res.Body)
+		}
+		assertSafe(t, res.StatusCode, res.Body, msgNotion, "VJ6r1Gq1iYcEJ9A=", "*url.Error")
+	})
+
+	t.Run("unknown", func(t *testing.T) {
+		logs.Reset()
+		h := testHandler(&fakeBackend{fail: errString("unexpected failure token " + token + " " + pageURL)}, nil, nil)
+		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
+		event.RequestContext.RequestID = "JMJ4sH2oIAMEjeg="
+		res, err := h.Handle(context.Background(), event)
+		if err != nil || res.StatusCode != 500 {
+			t.Fatalf("unknown %d %v %s", res.StatusCode, err, res.Body)
+		}
+		assertSafe(t, res.StatusCode, res.Body, msgServer, "JMJ4sH2oIAMEjeg=", "httpapi.errString")
+	})
+
+	t.Run("uuid request id omitted", func(t *testing.T) {
+		logs.Reset()
+		h := testHandler(&fakeBackend{fail: errString("Notion API: upstream failed")}, nil, nil)
+		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
+		event.RequestContext.RequestID = notionID
+		ctx := lambdacontext.NewContext(context.Background(), &lambdacontext.LambdaContext{AwsRequestID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
+		res, err := h.Handle(ctx, event)
+		if err != nil || res.StatusCode != 502 {
+			t.Fatalf("uuid id %d %v %s", res.StatusCode, err, res.Body)
+		}
+		if strings.Contains(res.Body, "requestId") || strings.Contains(res.Body, notionID) {
+			t.Fatalf("uuid request id leaked: %s", res.Body)
+		}
+		if !strings.Contains(logs.String(), "lambdaRequestId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda id missing from log: %s", logs.String())
+		}
+	})
+}
+
+func assertNoLeak(t *testing.T, body string, leaks []string) {
+	t.Helper()
+	for _, leak := range leaks {
+		if leak != "" && strings.Contains(body, leak) {
+			t.Fatalf("leaked %q in %s", leak, body)
+		}
 	}
 }
 

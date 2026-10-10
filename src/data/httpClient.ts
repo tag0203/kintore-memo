@@ -3,6 +3,7 @@ import { isDifficulty, toISODate, type ExerciseLog, type ExerciseSummary, type N
 import type { WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { chronological } from "./logRows";
+import { requestIdFromPayload } from "./requestId";
 
 /**
  * API Gateway 向けの WorkoutLogClient。
@@ -46,7 +47,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
+/** サーバーが 5xx で返してよい固定文言。それ以外の本文は画面に出さない。 */
+const SERVER_FAULTS = new Set([
+  "Notion との通信に失敗しました",
+  "サーバーでエラーが発生しました",
+  "処理に失敗しました",
+]);
+
+function withRequestId(message: string, requestId: string): string {
+  return requestId ? `${message}（${requestId}）` : message;
+}
+
 function messageFrom(payload: unknown, status: number, fallback: string): string {
+  if (status >= 500) {
+    let message = fallback;
+    if (isRecord(payload) && typeof payload.error === "string" && SERVER_FAULTS.has(payload.error)) {
+      message = payload.error;
+    }
+    return withRequestId(message, requestIdFromPayload(payload));
+  }
   if (isRecord(payload)) {
     if (typeof payload.error === "string" && payload.error.trim()) return payload.error;
     if (typeof payload.message === "string" && payload.message.trim()) return payload.message;

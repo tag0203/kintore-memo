@@ -64,7 +64,10 @@ function installApi() {
     if (parsed.pathname.endsWith("/api/bootstrap") && method === "GET") {
       if (failBootstrap > 0) {
         failBootstrap -= 1;
-        return Response.json({ error: "一時的に失敗しました" }, { status: 502 });
+        return Response.json(
+          { error: "Notion との通信に失敗しました", requestId: "ZoG1fH0oIAMEjeg=" },
+          { status: 502 },
+        );
       }
       const requested = parsed.searchParams.getAll("exercise");
       const names = requested.length > 0 ? requested : ["スクワット"];
@@ -271,11 +274,92 @@ describe("http workout client", () => {
     try {
       const workout = client();
       api.failNextBootstrap();
-      await expect(workout.getPreviousLog("スクワット", date)).rejects.toThrow("一時的に失敗しました");
+      await expect(workout.getPreviousLog("スクワット", date)).rejects.toThrow(
+        "Notion との通信に失敗しました（ZoG1fH0oIAMEjeg=）",
+      );
       await expect(workout.getPreviousLog("スクワット", date)).resolves.toMatchObject([
         { id: "squat-prev-light" },
         { id: "squat-prev" },
       ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows a fixed message for 5xx and keeps the 400 validation text", async () => {
+    const leak =
+      "User: arn:aws:sts::123456789012:assumed-role/example/fn https://example.invalid/v1/databases/a1b2c3d4-e5f6-4789-a123-ef1234567890";
+    let mode: "leak" | "validation" = "leak";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        if (mode === "validation") {
+          return Response.json({ error: "date は YYYY-MM-DD で指定してください" }, { status: 400 });
+        }
+        return Response.json(
+          { error: leak, message: leak, requestId: "https://example.invalid/req" },
+          { status: 502 },
+        );
+      }),
+    );
+    try {
+      const workout = client();
+      await expect(workout.listExercises()).rejects.toThrow("記録の取得に失敗しました");
+      await expect(workout.listExercises()).rejects.not.toThrow(/arn:|123456789012|example\.invalid|a1b2c3d4/);
+
+      mode = "validation";
+      const again = client();
+      await expect(again.listExercises()).rejects.toThrow("date は YYYY-MM-DD で指定してください");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not append an ARN, account id, token, or Notion id supplied as requestId", async () => {
+    for (const requestId of [
+      "arn:aws:iam::123456789012:root",
+      "123456789012",
+      "ntn_" + "secretvalue",
+      "secret_" + "ABC123456",
+      "a1b2c3d4e5f64789a123ef1234567890",
+      "a1b2c3d4-e5f6-4789-a123-ef1234567890",
+      "11111111-2222-4333-8444-555555555555",
+    ]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ error: "サーバーでエラーが発生しました", requestId }, { status: 500 }),
+        ),
+      );
+      try {
+        await client().listExercises();
+        expect.fail("expected an error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe("サーバーでエラーが発生しました");
+        expect((error as Error).message).not.toContain("arn:");
+        expect((error as Error).message).not.toContain("123456789012");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
+  it("appends a safe requestId to the fixed 5xx message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: "サーバーでエラーが発生しました", requestId: "ZoG1fH0oIAMEjeg=" },
+          { status: 500 },
+        ),
+      ),
+    );
+    try {
+      const workout = client();
+      await expect(workout.listExercises()).rejects.toThrow(
+        "サーバーでエラーが発生しました（ZoG1fH0oIAMEjeg=）",
+      );
     } finally {
       vi.unstubAllGlobals();
     }
