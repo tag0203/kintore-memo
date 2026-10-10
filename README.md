@@ -71,7 +71,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 
 ### Lambda の API
 
-`GET /api/health` だけ認証なしです。それ以外は API Gateway の JWT Authorizer が付いています。
+`GET /api/health` だけ認証なしです。それ以外の `GET` / `POST` / `PUT` は API Gateway の JWT Authorizer が付いています。ブラウザの preflight（`OPTIONS`）はルートにせず、HTTP API の CORS 設定が答えます。
 
 | メソッド | 経路 | 内容 |
 | --- | --- | --- |
