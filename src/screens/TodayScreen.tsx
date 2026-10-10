@@ -174,6 +174,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <>
           {canEditMenu && (
             <div className="plan-edit-row">
+              <h2>種目</h2>
               <button
                 type="button"
                 className="plan-edit"

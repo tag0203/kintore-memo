@@ -116,7 +116,13 @@ button, input { appearance: none; }
 }
 .text-input:focus, .field-row input:focus { border-color: var(--blue); outline: none; }
 
-.plan-edit-row { display: flex; justify-content: flex-end; margin-top: 12px; }
+.plan-edit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22px;
+}
+.plan-edit-row h2 { margin: 0; font-size: 14px; font-weight: 700; }
 .plan-edit {
   min-height: 44px;
   padding: 8px 4px;
