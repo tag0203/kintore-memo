@@ -115,7 +115,7 @@ Deploy
 | Lambda / ログ | 関数名 `kintore-memo-*-api` と、そのロググループ。`logs:DescribeLogGroups` だけはリソースを指定できないので `*` |
 | IAM | ロール `kintore-memo-*-api` の作成・更新は **PermissionsBoundary `kintore-memo-api-permissions-boundary` 付きに限定**。境界の削除は拒否。`iam:PassRole` は `lambda.amazonaws.com` だけ。API Gateway のサービスリンクロールを一度だけ作る権限 |
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
-| HTTP API | そのリージョンの `/apis` と `/tags` |
+| HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
 | CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
 
@@ -153,3 +153,32 @@ Deploy
 `infra/samconfig.toml` の `confirm_changeset = true` は手元用です。ワークフローは `--no-confirm-changeset` で上書きします。
 
 実アカウントがまだ無い状態では、変数を作らずにこのリポジトリをマージして構いません。CI は AWS なしで通り（`sam validate --lint` / `sam build` を含む）、Deploy は選んでも no-op です。
+
+## 初回デプロイが ROLLBACK_COMPLETE で止まったとき
+
+[run 38000076207](https://github.com/tag0203/kintore-memo/actions/runs/38000076207) は `HttpApiStage` の作成で `apigateway:TagResource` が拒否され、スタック `kintore-memo-dev` は `ROLLBACK_COMPLETE` です。ロールバックは各リソースの削除まで終わっているので、残っているのはスタックの記録だけです。`ROLLBACK_COMPLETE` は更新できないので、消してから作り直します。
+
+この作業は手元の管理者で行います。デプロイロールには `cloudformation:DeleteStack` が無く、OIDC スタック自身も Actions からは更新しません。先にロールを更新してからスタックを消してください。順序を逆にすると、同じ拒否でもう一度 `ROLLBACK_COMPLETE` になります。
+
+リポジトリルートで、更新済みの `infra/github-oidc.yaml` を使います。
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/github-oidc.yaml \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+```
+
+```bash
+aws cloudformation delete-stack \
+  --stack-name kintore-memo-dev \
+  --region ap-northeast-1
+
+aws cloudformation wait stack-delete-complete \
+  --stack-name kintore-memo-dev \
+  --region ap-northeast-1
+```
+
+`wait` が終わってから、Actions の **Deploy** を `main` で `dev` として再実行します。
