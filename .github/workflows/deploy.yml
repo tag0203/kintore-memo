@@ -90,10 +90,38 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # github.sha is the default-branch commit this workflow file came from.
-          # A later fetch updates origin/main without swapping the planner script.
+          # fetch-depth: 0 is the history of that SHA, not commits pushed while
+          # this run waited. A later fetch updates origin/main without swapping
+          # the planner script.
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Checkout the deploy role mask helper
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Mask the deploy role ARN
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The runner prints a step's env map before that step can call add-mask.
+          # Keep the ARN out of this step's env. Read the repository variable over
+          # REST (Bearer) and mask it so the gate step's env dump does not show it.
+          # A lookup failure must not block deploy; that step still has the variable.
+          if ARN="$(node scripts/actions-variable.mjs AWS_DEPLOY_ROLE_ARN)"; then
+            if [ -n "${ARN}" ]; then
+              echo "::add-mask::${ARN}"
+            fi
+          else
+            echo "Could not pre-mask AWS_DEPLOY_ROLE_ARN. The gate env dump may show the role ARN."
+          fi
+          unset ARN
 
       - name: Skip until the OIDC role exists
         id: gate
@@ -173,10 +201,22 @@ jobs:
           else
             ENVIRONMENT="dev"
             # See commits that landed after this workflow_run was queued.
-            # The token is masked; do not enable xtrace around this fetch.
+            # checkout's fetch-depth: 0 does not include them: its ref is github.sha.
+            # GitHub git smart HTTP does not accept a Bearer scheme for GITHUB_TOKEN
+            # and then prompts for a username (exit 128 with no TTY). Match
+            # actions/checkout: Basic x-access-token, base64, no line wrap.
+            # GITHUB_TOKEN is masked; the base64 form is a different string, so mask
+            # that too. Do not enable xtrace. The header lives only on this command.
             # '+' accepts a force-push. The plan then refuses a SHA that is no longer on main.
-            git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+            if [ -z "${GITHUB_TOKEN}" ]; then
+              echo "GITHUB_TOKEN is empty. Refusing to fetch origin/main."
+              exit 1
+            fi
+            GIT_AUTH_B64="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            echo "::add-mask::${GIT_AUTH_B64}"
+            git -c "http.extraheader=AUTHORIZATION: basic ${GIT_AUTH_B64}" \
               fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            unset GIT_AUTH_B64
             LAST_ARGS=()
             # A failed or empty lookup deploys. Missing history must not skip the tree CI tested.
             if LAST_DEPLOYED="$(node scripts/last-deployed.mjs)"; then

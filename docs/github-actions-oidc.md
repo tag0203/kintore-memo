@@ -33,7 +33,9 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 `workflow_run` には `paths` フィルタがありません。gate は、GitHub Deployments の environment `dev` で最後に成功したデプロイの SHA から、テストした tip までの差分を見ます。push の `before` は使いません。CI がキャンセルされたり、`deploy-dev` の待ちが 1 本に置き換わったりしても、実行される run は未デプロイのアプリケーション変更を含んだ木をデプロイします。
 
-成功した `dev` の publish のあと、`record-dev-deployment` が同じ SHA で deployment を作り、status を `success` にします。このジョブに AWS 資格情報はありません。手動の `dev` も記録します。`staging` と `prod` は記録しません。これは `GITHUB_TOKEN` の `deployments: read` / `deployments: write` と、新しいコミットの CI 結果を見る `actions: read` です。OIDC ロールの権限は変わりません。
+成功した `dev` の publish のあと、`record-dev-deployment` が同じ SHA で deployment を作り、status を `success` にします。このジョブに AWS 資格情報はありません。手動の `dev` も記録します。`staging` と `prod` は記録しません。記録ジョブの `GITHUB_TOKEN` は `contents: read` と `deployments: write` です。gate は読み取りだけ（`contents: read`、`deployments: read`、`actions: read`）で、deployment は作りません。OIDC ロールの権限は変わりません。
+
+gate の checkout は `fetch-depth: 0` でも、この run がキューに入ったときの `github.sha` までの履歴です。キュー後に `main` へ入ったコミットは含まれないので、計画の前に `origin/main` をもう一度 fetch します。git には `Authorization: Bearer` を付けません。GitHub の git smart HTTP は `GITHUB_TOKEN` の Bearer を受け取らず、ユーザー名入力で失敗します。`x-access-token:<token>` を改行なしの base64 にした Basic（`actions/checkout` と同じ）を使い、その base64 もマスクします。`set -x` は付けません。Deployments と CI 結論の REST は `Bearer` のままです。
 
 - その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけ、または差分が空なら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
 - 成功記録が無い、API が読めない、SHA がリポジトリに無い、テストした SHA の祖先でないときは、範囲が分からないので tip をデプロイします
@@ -53,19 +55,19 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 | ジョブ | AWS / `id-token` | 内容 |
 | --- | --- | --- |
-| `gate` | なし（`deployments: read`、`actions: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV`、最後に成功した dev デプロイ以降の差分、新しいコミットの CI が成功済みかも見る |
+| `gate` | なし（`contents: read`、`deployments: read`、`actions: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV`、最後に成功した dev デプロイ以降の差分、新しいコミットの CI が成功済みかも見る。`origin/main` の更新は git Basic |
 | `build` | なし | `sam build`。成果物を artifact へ |
 | `deploy-stack` | OIDC | 検証済み SAM 成果物を `sam deploy`。公開スタック出力だけを artifact へ |
 | `build-spa` | なし | `npm ci` / `npm run build` / `check:secrets`（公開 Cognito・API URL のみ） |
 | `publish-spa` | OIDC | `dist/` を S3 同期し CloudFront を無効化 |
-| `record-dev-deployment` | なし（`deployments: write`） | `dev` の publish 成功後に、その SHA を GitHub Deployments の environment `dev` へ記録する。`staging` / `prod` では動かない |
+| `record-dev-deployment` | なし（`contents: read`、`deployments: write`） | `dev` の publish 成功後に、その SHA を GitHub Deployments の environment `dev` へ記録する。REST は `Bearer`。`staging` / `prod` では動かない |
 
 `npm` の lifecycle やビルド依存が侵害されても、そのプロセスからは AWS 一時資格情報を読めません。ビルドを同じジョブの末尾へ移すだけでは不十分なため、資格情報付きジョブとは分けています。
 
 ## ログに出さないもの
 
 - ワークフローは `set -x`、`sam --debug`、`aws --debug` を使いません。
-- ロール ARN は形を確認したあとマスクします。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
+- ロール ARN は gate の env ダンプより前に、リポジトリ変数 API（REST の `Bearer`）で読んでマスクします。API が読めないときはデプロイを止めません。その実行の env ダンプには ARN が出ることがあります。アカウント ID は秘密ではありません。形を確認したあともマスクします。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
 - ジョブ開始時にアクセスキー系の環境変数があると、引き受ける前に失敗します。
 - デプロイロールは Notion 用 SSM パラメータの読み書きを明示的に拒否します。値は [aws-deploy.md](./aws-deploy.md) のとおり、手元の CLI で作ります。ワークフローはパラメータ名を解決しません。
 - `npm run check:secrets` は (1) ブラウザ側と `dist/` にトークン名・ホストが無いこと、(2) **追跡ファイル全体**に Notion トークン値（`ntn_…` / `secret_…`）が無いことを見ます。漏れていたらファイルパスとパターン名だけを出し、一致した中身は出しません。
