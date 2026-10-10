@@ -46,7 +46,7 @@ docs/
   aws-deploy.md         このファイル
   dynamodb.md           単一テーブル（#11）
   github-actions-oidc.md
-.github/workflows/      CI と、手動の OIDC デプロイ
+.github/workflows/      CI と、OIDC デプロイ（main の CI 成功後に dev、ほかは手動）
 ```
 
 ## デプロイ（1 環境）
@@ -197,7 +197,9 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 
 CI は pull request と `main` で毎回、テスト、型チェック、ビルド、`check:secrets`、`sam validate --lint`、`sam build` を実行します。AWS アカウントは要りません。
 
-OIDC での `sam deploy` と S3 / CloudFront への公開は手動ワークフローです。ロール用のリポジトリ変数が空の間は成功のまま何もしません。アクセスキーは使いません。作成手順と権限は [github-actions-oidc.md](./github-actions-oidc.md) です。
+`main` への push でその CI が成功すると、OIDC で `dev` に `sam deploy` し、S3 / CloudFront へ公開します。checkout するのは CI がテストしたコミットです。`staging` と `prod` は Actions の Deploy を手動実行します。ロール用のリポジトリ変数が空の間は、自動も手動も成功のまま何もしません。アクセスキーは使いません。
+
+最後に成功した `dev` デプロイ以降がドキュメントと Markdown だけのときは、自動デプロイをスキップします。それより前のアプリケーション変更がまだデプロイされていなければ、テストした tip をデプロイします。より新しいアプリケーションコミットの CI が失敗しているときは、テスト済みの古い SHA をデプロイします。新しい CI が成功しているときと、そのコミットがすでに `dev` にあるときだけ、古い SHA は出しません。自動デプロイだけを止めるときは、リポジトリ変数 `AUTO_DEPLOY_DEV` を `false` にします。手動実行は残ります。作成手順、権限、OIDC の信頼は [github-actions-oidc.md](./github-actions-oidc.md) です。この自動デプロイのために OIDC スタックの再適用は要りません。
 
 ## スコープ外（#8 ではやらない）
 

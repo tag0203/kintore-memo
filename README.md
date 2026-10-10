@@ -149,4 +149,4 @@ Cognito の自前ログインとユーザー作成は [docs/aws-auth.md](docs/aw
 
 DynamoDB の単一テーブル（DayPlan と任意の Notion キャッシュ）は [docs/dynamodb.md](docs/dynamodb.md) です。本番の Lambda は Go の `api/` です（[#23](https://github.com/tag0203/kintore-memo/issues/23)）。画面の記録クライアントは `src/data/httpClient.ts` です（[#12](https://github.com/tag0203/kintore-memo/issues/12)）。今日のメニューは Go の `GET` / `PUT /api/day-plan` と `src/data/dayPlanClient.ts` です（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。
 
-GitHub Actions の CI は pull request と `main` で、テスト、型チェック、ビルド、`check:secrets`、Go のテスト、`sam validate --lint`、`sam build` を実行します。AWS への反映は OIDC の手動ワークフローで、ロールが未設定の間は何もしません。長期のアクセスキーは使いません。手順は [docs/github-actions-oidc.md](docs/github-actions-oidc.md) です。
+GitHub Actions の CI は pull request と `main` で、テスト、型チェック、ビルド、`check:secrets`、Go のテスト、`sam validate --lint`、`sam build` を実行します。`main` への push で CI が成功すると `dev` へ自動デプロイし、`staging` と `prod` は手動です。最後に成功した `dev` デプロイ以降がドキュメントだけのときはスキップします。ロールが未設定の間は何もしません。長期のアクセスキーは使いません。手順は [docs/github-actions-oidc.md](docs/github-actions-oidc.md) です。

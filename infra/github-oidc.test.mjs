@@ -20,6 +20,7 @@ describe("GitHub OIDC bootstrap", () => {
     expect(template).toContain("token.actions.githubusercontent.com:workflow");
     expect(template).not.toContain("token.actions.githubusercontent.com:workflow_ref");
     expect(template).not.toContain("token.actions.githubusercontent.com:job_workflow_ref");
+    expect(template).not.toContain("token.actions.githubusercontent.com:event_name");
     expect(template).toContain("DeployWorkflowName");
     expect(template).toContain("Default: Deploy");
     expect(template).toContain("ref:refs/heads/${AllowedBranch}");
