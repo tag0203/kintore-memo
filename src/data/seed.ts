@@ -1,6 +1,6 @@
 import {
   addDays,
-  toISODate,
+  tokyoCivilDate,
   type Difficulty,
   type ExerciseLog,
   type ExerciseSummary,
@@ -41,9 +41,9 @@ function makeLog(
   };
 }
 
-/** 画面モックに合わせた初期データ。日付は起動日からの相対。 */
+/** 画面モックに合わせた初期データ。日付はセッションと同じ東京の暦日。 */
 export function createSeed(now = new Date()): MockSnapshot {
-  const today = toISODate(now);
+  const today = tokyoCivilDate(now);
   const yesterday = addDays(today, -1);
   const threeDaysAgo = addDays(today, -3);
   const sixDaysAgo = addDays(today, -6);

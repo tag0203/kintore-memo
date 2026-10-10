@@ -9,9 +9,12 @@ import {
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
 import {
+  SESSION_DATE_SAVE_FAILED,
   isWritableSessionDate,
   menuFromDayPlan,
+  msUntilNextTokyoDate,
   readStoredSessionDate,
+  realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
   storeMenu,
@@ -148,6 +151,8 @@ export function SessionProvider({
   const switching = useRef(false);
   const nowRef = useRef(now);
   nowRef.current = now;
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -205,6 +210,36 @@ export function SessionProvider({
     saver.schedule({ date, memo, exercises, finished });
   }, [phase, saver, date, memo, exercises, finished, menuDate]);
 
+  const flushPending = useCallback(async () => {
+    const saver = saverRef.current;
+    if (!saver) return true;
+    return saver.flush();
+  }, []);
+
+  const applySwitchedDate = useCallback(
+    (previous: string, next: string, notice: string | null) => {
+      setDateNotice(notice);
+      if (dayPlan) {
+        // 読み込みが終わるまで、前のメニューを新しい日付へ保存しない。
+        setMenuDate(null);
+        setPhase("loading");
+        dateRef.current = next;
+        setDateState(next);
+        return;
+      }
+      storeMenu(localMenus.current, previous, menuRef.current);
+      const restored = recallMenu(localMenus.current, next);
+      menuRef.current = restored;
+      dateRef.current = next;
+      setMemoState(restored.memo);
+      setExercises(restored.exercises);
+      setFinished(restored.finished);
+      setMenuDate(next);
+      setDateState(next);
+    },
+    [dayPlan],
+  );
+
   const setDate = useCallback(
     async (next: string) => {
       if (switching.current || next === dateRef.current) return;
@@ -216,35 +251,21 @@ export function SessionProvider({
           currentDate: previous,
           nextDate: next,
           now: nowRef.current(),
-          flush: () => saverRef.current?.flush() ?? Promise.resolve(),
+          flush: flushPending,
           persist: (value) => writeStoredSessionDate(dateStorage, value),
         });
-        if (!result.switched) return;
-        // flush の通信中に入った変更を、日付を変える前にもう一度送る。
-        await saverRef.current?.flush();
-        setDateNotice(null);
-        if (dayPlan) {
-          // 読み込みが終わるまで、前のメニューを新しい日付へ保存しない。
-          setMenuDate(null);
-          setPhase("loading");
-          dateRef.current = result.date;
-          setDateState(result.date);
+        if (!result.switched) {
+          if (result.reason === "save_failed") {
+            setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
+          }
           return;
         }
-        storeMenu(localMenus.current, previous, menuRef.current);
-        const restored = recallMenu(localMenus.current, result.date);
-        menuRef.current = restored;
-        dateRef.current = result.date;
-        setMemoState(restored.memo);
-        setExercises(restored.exercises);
-        setFinished(restored.finished);
-        setMenuDate(result.date);
-        setDateState(result.date);
+        applySwitchedDate(previous, result.date, null);
       } finally {
         switching.current = false;
       }
     },
-    [dateStorage, dayPlan],
+    [applySwitchedDate, dateStorage, flushPending],
   );
 
   const dismissDateNotice = useCallback(() => setDateNotice(null), []);
@@ -267,8 +288,68 @@ export function SessionProvider({
   }, [saver]);
 
   useEffect(() => {
+    let cancelled = false;
+    let timer = 0;
+    let checking = false;
+
+    const schedule = (delay: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void tick();
+      }, delay);
+    };
+
+    const tick = async () => {
+      if (cancelled || checking) return;
+      checking = true;
+      let nextDelay = 1000;
+      try {
+        if (switching.current || phaseRef.current === "loading") return;
+        if (phaseRef.current !== "ready") {
+          nextDelay = Math.max(msUntilNextTokyoDate(nowRef.current()), 1000);
+          return;
+        }
+        const previous = dateRef.current;
+        const at = nowRef.current();
+        if (!isWritableSessionDate(previous, at)) {
+          const outcome = await realignSessionDate({
+            selected: previous,
+            now: nowRef.current(),
+            flush: flushPending,
+            persist: (value) => writeStoredSessionDate(dateStorage, value),
+          });
+          if (cancelled || dateRef.current !== previous || switching.current) return;
+          if (!outcome.changed) {
+            setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
+            nextDelay = 30_000;
+            return;
+          }
+          applySwitchedDate(previous, outcome.date, outcome.notice);
+        }
+        nextDelay = Math.max(msUntilNextTokyoDate(nowRef.current()), 1000);
+      } finally {
+        checking = false;
+        if (!cancelled) schedule(nextDelay);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void tick();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    schedule(Math.max(msUntilNextTokyoDate(nowRef.current()), 1000));
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [applySwitchedDate, dateStorage, flushPending]);
+
+  useEffect(() => {
     if (!saver) return;
-    return registerBeforeSignOut(() => saver.flush());
+    return registerBeforeSignOut(async () => {
+      await saver.flush();
+    });
   }, [registerBeforeSignOut, saver]);
 
   const value = useMemo<Session>(() => {

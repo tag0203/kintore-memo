@@ -23,6 +23,8 @@ function snapshot(input: DayPlanInput): DayPlanInput {
 /**
  * Debounced, ordered saves. A newer snapshot replaces one that has not been sent.
  * Call flush() on pagehide so a reload does not drop the last edit.
+ * flush() resolves false when the latest snapshot was not stored. The caller must
+ * not markSaved() over it, or the unsaved edit is gone.
  */
 export function createDayPlanSaver(
   save: (input: DayPlanInput) => Promise<void>,
@@ -34,37 +36,52 @@ export function createDayPlanSaver(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: DayPlanInput | null = null;
   let savedKey = "";
-  let chain: Promise<void> = Promise.resolve();
+  let chain: Promise<boolean> = Promise.resolve(true);
 
-  async function send() {
-    if (!allowWrite()) return;
+  function isCurrentSaved(): boolean {
+    return latest == null || fingerprint(latest) === savedKey;
+  }
+
+  /** false: 未保存のスナップショットを書けなかった。true: この送信は受け付けた（新しい編集が残ることもある）。 */
+  async function send(): Promise<boolean> {
     const input = latest;
-    if (!input) return;
+    if (!input || fingerprint(input) === savedKey) return true;
     const key = fingerprint(input);
-    if (key === savedKey) return;
-    if (!allowWrite()) return;
+    if (!allowWrite()) return false;
     try {
       await save(input);
       if (latest && fingerprint(latest) === key) {
         savedKey = key;
         listeners.onSaved?.();
       }
+      return true;
     } catch (error) {
       if (latest && fingerprint(latest) === key) {
         const message = error instanceof Error ? error.message : "メニューを保存できませんでした";
         listeners.onError?.(message);
       }
+      return false;
     }
   }
 
-  function flush(): Promise<void> {
+  async function drain(): Promise<boolean> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (isCurrentSaved()) return true;
+      const ok = await send();
+      if (!ok) return false;
+    }
+    return isCurrentSaved();
+  }
+
+  /** 最新のスナップショットが保存できたときだけ true。失敗しても latest は残す。 */
+  function flush(): Promise<boolean> {
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    if (!latest || fingerprint(latest) === savedKey) return chain;
-    chain = chain.then(send);
-    return chain;
+    const run = chain.then(drain);
+    chain = run;
+    return run;
   }
 
   return {

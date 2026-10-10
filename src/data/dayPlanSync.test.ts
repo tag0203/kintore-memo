@@ -118,11 +118,25 @@ describe("createDayPlanSaver", () => {
       },
     });
     saver.schedule(plan("脚"));
-    await saver.flush();
+    await expect(saver.flush()).resolves.toBe(false);
     expect(errors).toEqual(["メニューの保存先に接続できませんでした"]);
+    expect(save).toHaveBeenCalledWith(plan("脚"));
     fail = false;
     saver.schedule(plan("胸"));
-    await saver.flush();
+    await expect(saver.flush()).resolves.toBe(true);
     expect(saved).toBe(1);
+  });
+
+  it("keeps a failed snapshot so a later flush can still save it", async () => {
+    const save = vi.fn(async () => {});
+    save.mockImplementationOnce(async () => {
+      throw new Error("offline");
+    });
+    const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    await expect(saver.flush()).resolves.toBe(false);
+    await expect(saver.flush()).resolves.toBe(true);
+    expect(save).toHaveBeenLastCalledWith(plan("脚"));
   });
 });

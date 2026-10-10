@@ -17,6 +17,8 @@ export const SESSION_DATE_STORAGE_KEY = "kintore-memo.session-date";
 export const SESSION_DATE_OUT_OF_RANGE_NOTICE =
   "選んでいた日付は前日〜翌日の範囲外になったため、今日に戻しました。";
 
+export const SESSION_DATE_SAVE_FAILED = "メニューを保存できなかったため、日付を切り替えませんでした";
+
 export interface SessionDateChoice {
   date: string;
   label: "前日" | "今日" | "翌日";
@@ -79,23 +81,59 @@ export function writeStoredSessionDate(storage: SessionDateStorage, date: string
   }
 }
 
+export type SessionDateSwitch =
+  | { switched: true; date: string }
+  | { switched: false; date: string; reason: "unchanged" | "out_of_window" | "save_failed" };
+
 /**
  * 日付を変える。窓の外と、いまと同じ日付は何もしない。
- * 変えるときは、保存してから persist する。途中の DayPlan を捨てないため。
+ * 未保存の DayPlan が保存できたときだけ persist する。失敗時は今の日付に留まる。
  */
 export async function switchSessionDate(input: {
   currentDate: string;
   nextDate: string;
   now: Date;
-  flush: () => Promise<void>;
+  flush: () => Promise<boolean>;
   persist: (date: string) => void;
-}): Promise<{ date: string; switched: boolean }> {
-  if (!isWritableSessionDate(input.nextDate, input.now) || input.nextDate === input.currentDate) {
-    return { date: input.currentDate, switched: false };
+}): Promise<SessionDateSwitch> {
+  if (input.nextDate === input.currentDate) {
+    return { date: input.currentDate, switched: false, reason: "unchanged" };
   }
-  await input.flush();
+  if (!isWritableSessionDate(input.nextDate, input.now)) {
+    return { date: input.currentDate, switched: false, reason: "out_of_window" };
+  }
+  const saved = await input.flush();
+  if (!saved) return { date: input.currentDate, switched: false, reason: "save_failed" };
   input.persist(input.nextDate);
   return { date: input.nextDate, switched: true };
+}
+
+/** 次の東京 0:00 までのミリ秒。ちょうど 0:00 なら次の日まで。 */
+export function msUntilNextTokyoDate(now: Date): number {
+  const tomorrow = addDays(tokyoCivilDate(now), 1);
+  const [year, month, day] = tomorrow.split("-").map(Number);
+  const midnight = Date.UTC(year ?? 1970, (month ?? 1) - 1, day ?? 1) - 9 * 60 * 60 * 1000;
+  return Math.max(0, midnight - now.getTime());
+}
+
+/**
+ * 東京の日付が進んで、選んでいた日が窓の外になったときだけ今日へ戻す。
+ * 戻す前に未保存の編集を保存する。保存できなければ日付は動かさない。
+ */
+export async function realignSessionDate(input: {
+  selected: string;
+  now: Date;
+  flush: () => Promise<boolean>;
+  persist: (date: string) => void;
+}): Promise<{ date: string; notice: string | null; changed: boolean }> {
+  if (isWritableSessionDate(input.selected, input.now)) {
+    return { date: input.selected, notice: null, changed: false };
+  }
+  const saved = await input.flush();
+  if (!saved) return { date: input.selected, notice: null, changed: false };
+  const today = tokyoCivilDate(input.now);
+  input.persist(today);
+  return { date: today, notice: SESSION_DATE_OUT_OF_RANGE_NOTICE, changed: true };
 }
 
 /** DayPlan の応答を、その日付のメニューとして使う。finished は日付ごとに別。 */
