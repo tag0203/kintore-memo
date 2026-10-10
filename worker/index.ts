@@ -76,10 +76,7 @@ export async function handleRequest(
 
   try {
     if (url.pathname === "/api/health" && request.method === "GET") {
-      return json(env, {
-        ok: true,
-        notionConfigured: Boolean(env.NOTION_TOKEN && env.NOTION_DATABASE_ID),
-      });
+      return json(env, { ok: true });
     }
 
     if (url.pathname === "/api/exercises" && request.method === "GET") {

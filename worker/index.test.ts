@@ -37,14 +37,15 @@ function client(partial: Partial<WorkoutLogClient> = {}): WorkoutLogClient {
 }
 
 describe("worker HTTP API", () => {
-  it("reports configuration without echoing the token", async () => {
+  it("returns only ok and does not echo the token or configuration", async () => {
     const response = await handleRequest(new Request("https://app.example/api/health"), {
       NOTION_TOKEN: "test-token",
       NOTION_DATABASE_ID: "db-1",
     });
-    const body = (await response.json()) as { ok: boolean; notionConfigured: boolean };
-    expect(body).toEqual({ ok: true, notionConfigured: true });
+    const body = (await response.json()) as { ok: boolean };
+    expect(body).toEqual({ ok: true });
     expect(JSON.stringify(body)).not.toContain("test-token");
+    expect(JSON.stringify(body)).not.toContain("notionConfigured");
   });
 
   it("creates a log through the injected client", async () => {

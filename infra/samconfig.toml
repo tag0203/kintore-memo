@@ -20,7 +20,7 @@ confirm_changeset = true
 fail_on_empty_changeset = false
 # SpaAllowedOrigin is not here. On an existing stack, pass
 # SpaAllowedOrigin=https://<distribution>.cloudfront.net or API CORS drops it.
-parameter_overrides = "ProjectName=kintore-memo Environment=dev LogRetentionDays=14"
+parameter_overrides = "ProjectName=kintore-memo Environment=dev LogRetentionDays=14 ReservedConcurrency=0"
 
 [default.local_start_api.parameters]
 warm_containers = "EAGER"

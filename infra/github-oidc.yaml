@@ -245,6 +245,10 @@ Resources:
                   - lambda:TagResource
                   - lambda:UntagResource
                   - lambda:PublishVersion
+                  # CloudFormation sets or clears ReservedConcurrentExecutions with these.
+                  # GetFunction is already above. Not granted on "*".
+                  - lambda:PutFunctionConcurrency
+                  - lambda:DeleteFunctionConcurrency
                 Resource:
                   - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api
                   - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api:*
@@ -344,6 +348,38 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api:*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http:*
+              # Enabling HTTP API access logs calls CloudWatch Logs delivery as the
+              # deploying principal. These actions have no resource type. AWS also
+              # requires Resource "*" for PutResourcePolicy and DescribeResourcePolicies
+              # (a single log-group ARN does not authorize them). API Gateway writes the
+              # log group's resource policy; this template does not manage one.
+              # Stage AccessLogSettings updates use the HttpApi apigateway verbs on /apis/*.
+              - Sid: HttpApiAccessLogDelivery
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                Resource: "*"
+              # Activating access logs also calls these (AWS HTTP API logging permissions).
+              # DescribeLogStreams and FilterLogEvents apply to the log group.
+              # GetLogEvents applies to log streams, so the :* ARN is included.
+              # Not granted on "*" and not on the Lambda log groups.
+              - Sid: ReadHttpApiAccessLogGroup
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:FilterLogEvents
+                  - logs:GetLogEvents
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http:*
               - Sid: HttpApi
                 Effect: Allow
                 Action:

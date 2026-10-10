@@ -156,7 +156,7 @@ Deploy
 
 自動デプロイの `workflow_run` でも、この信頼のままで引き受けられます。このイベントはデフォルトブランチ（`main`）で動き、OIDC トークンを要求するのは引き続き `name: Deploy` の workflow です。そのため `sub` は上の `ref:refs/heads/main`、`workflow` は `Deploy` のままです。`event_name` は `workflow_run` になりますが、信頼条件は `event_name` を見ていません。reusable workflow ではないので `job_workflow_ref` は `deploy.yml@refs/heads/main` であり、条件には使っていません。
 
-CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。その場合 AWS が見る `workflow` は呼び出し元の `CI` になり、信頼の更新と、CI という名前の workflow からの引き受けが必要になります。`infra/github-oidc.yaml` は変えていないので、この変更のために OIDC スタックを再適用する必要はありません。
+CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。その場合 AWS が見る `workflow` は呼び出し元の `CI` になり、信頼の更新と、CI という名前の workflow からの引き受けが必要になります。信頼条件はこの自動デプロイのために変えていません。アクセスログ、予約同時実行、CloudFront のレスポンスヘッダーポリシーの権限を足したときは、下の手順で OIDC スタックを先に更新します。
 
 ## 権限の範囲
 
@@ -166,15 +166,18 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 | --- | --- |
 | CloudFormation | スタック `kintore-memo-dev` / `staging` / `prod` と、SAM が成果物バケットに使う `aws-sam-cli-managed-default`。SAM Transform。`ValidateTemplate` のみリソース `*` |
 | S3 | SPA バケット `kintore-memo-*-spa-<account>` と SAM 管理バケット。`ListAllMyBuckets` のみ `*`。ACL の付与はしない |
-| Lambda / ログ | 関数名 `kintore-memo-*-api` と、そのロググループ。`logs:DescribeLogGroups` だけはリソースを指定できないので `*` |
+| Lambda / ログ | 関数名 `kintore-memo-*-api`（`PutFunctionConcurrency` / `DeleteFunctionConcurrency` を含む）と、そのロググループ、および `/aws/apigateway/kintore-memo-*-http`。`logs:DescribeLogGroups` はリソースを指定できないので `*` |
 | IAM | ロール `kintore-memo-*-api` の作成・更新は **PermissionsBoundary `kintore-memo-api-permissions-boundary` 付きに限定**。境界の削除は拒否。`iam:PassRole` は `lambda.amazonaws.com` だけ。API Gateway のサービスリンクロールを一度だけ作る権限 |
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
-| HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
+| HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージの `AccessLogSettings` 更新もこの `PATCH` / `PUT` に含まれる。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
+| アクセスログの配信 | `logs:CreateLogDelivery` / `GetLogDelivery` / `UpdateLogDelivery` / `DeleteLogDelivery` / `ListLogDeliveries` / `PutResourcePolicy` / `DescribeResourcePolicies`。これらはリソースタイプが無く、`PutResourcePolicy` と `DescribeResourcePolicies` は単一ロググループの ARN では権限にならないので `*`。有効化に必要な `logs:DescribeLogStreams` / `FilterLogEvents` / `GetLogEvents` はアクセスロググループ `/aws/apigateway/kintore-memo-*-http`（`GetLogEvents` 用に `:log-stream` 側の `:*` も）だけ。Lambda のロググループと `*` には付けない |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
 | CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control。レスポンスヘッダーポリシーの作成（`CreateResponseHeadersPolicy`）も id が無いので `*`。取得・更新・削除（`GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy`）は `response-headers-policy/*` |
 
 意図的に外しているもの:
 
+- Lambda ロググループに対する `logs:DescribeLogStreams` / `GetLogEvents` / `FilterLogEvents`。HTTP API のアクセスログを有効にするとき AWS がこの 3 つを要求するので、アクセスロググループにだけ付ける
+- Lambda 実行ロールの PermissionsBoundary の拡大。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、実行中の Lambda の権限ではない
 - アクセスキーの作成（明示的に拒否）
 - Notion 用 SSM（`/kintore-memo/*/notion/*`）の読み書き（明示的に拒否）。ただし境界導入後も、正当な API ロール経由の Notion 読取は Lambda コード変更で間接利用され得る。デプロイ担当が SSM を直接読めないことと、Lambda が読めないことは別
 - スタックの削除（`cloudformation:DeleteStack` は付けていません。削除は手元の管理者で行います）
@@ -192,6 +195,35 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 2. **GitHub Environment `prod`（任意）** … 必須 reviewer。入れる場合は OIDC の `sub` が `environment:prod` 形式になるので `infra/github-oidc.yaml` の信頼条件を同時更新し、Deploy の `prod` だけその Environment を `environment:` に指定する
 3. **Actions の SHA pinning ポリシー** … 対応プランでは `sha_pinning_required` を有効化。ワークフローは既にフル SHA 固定
 4. **Secret Scanning / Push Protection** … GitHub のリポジトリまたは org 設定で有効化（`check:secrets` の補完）
+
+## アクセスログと予約同時実行の権限を先に適用する
+
+`infra/github-oidc.yaml` に、HTTP API アクセスログ用のログ配信権限と、API Lambda の `lambda:PutFunctionConcurrency` / `DeleteFunctionConcurrency`、ロググループ `/aws/apigateway/kintore-memo-*-http` への `logs:CreateLogGroup` を足しています。アプリの `sam deploy` より先に、手元の管理者でこのスタックを更新します。
+
+`main` は PR 必須です。マージ後、CI が成功すると `workflow_run` で `dev` が自動デプロイされます。先にロールを更新しないと、そのデプロイが権限不足で失敗します。`main` に入っている古い `infra/github-oidc.yaml` では足りません。この変更を含むツリーで、リポジトリルートから実行します。
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/github-oidc.yaml \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+```
+
+成功の確認はスタックの状態だけを見ます。ロール ARN や他の出力は出しません。
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --query "Stacks[0].StackStatus" \
+  --output text
+```
+
+`UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。予約同時実行の値は `0` のままです。上げる手順は [aws-deploy.md](./aws-deploy.md) です。値を変えるだけなら、このスタックの再適用は要りません。
+
+同じファイルには、CloudFront のレスポンスヘッダーポリシー用に `cloudfront:CreateResponseHeadersPolicy`（リソース `*`）と、`response-headers-policy/*` への `GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy` も入っています。アクセスログ用にこのスタックを更新済みでも、その更新にはこの CloudFront 権限は含まれません。セキュリティヘッダーを `main` に入れる前に、上と同じコマンドをこのツリーで再実行し、`StackStatus` が `UPDATE_COMPLETE` であることを確認してください。確認は `StackStatus` だけです。ロール ARN は出しません。
 
 ## デプロイの実行
 

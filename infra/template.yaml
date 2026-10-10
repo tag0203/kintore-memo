@@ -3,6 +3,8 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   kintore-memo — S3+CloudFront+OAC, HTTP API+Lambda, Cognito JWT Authorizer,
   DynamoDB On-Demand, SSM SecureString, CloudWatch Logs with retention.
+  HTTP API default-route throttling and access logs. API Lambda reserved
+  concurrency stays unset unless ReservedConcurrency is 2-5.
   The API Lambda is Go (api/, provided.al2023, #23). worker/ is a reference
   implementation and is not deployed. Custom domain / ACM is #13.
 
@@ -20,7 +22,7 @@ Parameters:
     Type: Number
     Default: 14
     AllowedValues: [7, 14]
-    Description: CloudWatch Logs retention for the API Lambda.
+    Description: CloudWatch Logs retention for the API Lambda. HTTP API access logs are fixed at 14 days.
   # CORS must not GetAtt SpaDistribution. The response headers policy references
   # this API (exact execute-api host in CSP), and the distribution references
   # that policy. A GetAtt here would be a CloudFormation cycle.
@@ -33,9 +35,29 @@ Parameters:
       Gateway CORS. The deploy workflow sets it from CloudFrontDomainName and
       does not print it. Empty only on the first create, before the
       distribution exists; the workflow deploys again once the domain exists.
+  # 0 or empty omits ReservedConcurrentExecutions. A new account (including the
+  # 2026-10 project signup) can have a concurrency quota of 10. Reserving any
+  # executions fails unless at least 10 unreserved remain. See docs/aws-deploy.md.
+  ReservedConcurrency:
+    Type: String
+    Default: "0"
+    AllowedPattern: "^$|^0$|^[2-5]$"
+    Description: >
+      Reserved concurrent executions for the API Lambda. 0 or empty leaves the
+      property unset. 2-5 reserves that many. Do not set 2-5 until
+      aws lambda get-account-settings shows UnreservedConcurrentExecutions
+      can spare N and still leave at least 10 (add back this function's current
+      reservation first). See docs/aws-deploy.md.
 
 Conditions:
   HasSpaAllowedOrigin: !Not [!Equals [!Ref SpaAllowedOrigin, ""]]
+  HasReservedConcurrency: !Not
+    - !Or
+      - !Equals [!Ref ReservedConcurrency, ""]
+      - !Equals [!Ref ReservedConcurrency, "0"]
+  ReservedConcurrencyIs2: !Equals [!Ref ReservedConcurrency, "2"]
+  ReservedConcurrencyIs3: !Equals [!Ref ReservedConcurrency, "3"]
+  ReservedConcurrencyIs4: !Equals [!Ref ReservedConcurrency, "4"]
 
 Globals:
   Function:
@@ -129,10 +151,30 @@ Resources:
   # SSM SecureString for Notion token / database id cannot be created by
   # CloudFormation (String / StringList only). Names + IAM are defined here;
   # create the SecureString values after deploy — see docs/aws-deploy.md.
+  # Access logs only. No execution logs (those can include request data).
+  # Retention is 14 days, not LogRetentionDays, so a 7-day Lambda setting
+  # cannot shorten this group.
+  HttpApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/${ProjectName}-${Environment}-http
+      RetentionInDays: 14
+
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
       StageName: !Ref Environment
+      # Steady 10 rps, burst 20, on every route including unauthenticated health.
+      # This is what stops a health-check loop from invoking Lambda without bound.
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 10
+        ThrottlingBurstLimit: 20
+      # JSON access log. No Authorization header and no JWT claims, including sub.
+      # authorizer.error is the authorizer failure string, not the token.
+      # IP is the client address ($context.identity.sourceIp), requested for abuse tracing.
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationErrorMessage":"$context.integrationErrorMessage","authorizerError":"$context.authorizer.error"}'
       Auth:
         DefaultAuthorizer: CognitoJwtAuthorizer
         Authorizers:
@@ -239,6 +281,21 @@ Resources:
       Runtime: provided.al2023
       Role: !GetAtt ApiFunctionRole.Arn
       Timeout: 20
+      # The else branch is 5 only because AllowedPattern rejects every other
+      # value once 2, 3, and 4 are matched. 0 and empty take AWS::NoValue.
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrency
+        - !If
+          - ReservedConcurrencyIs2
+          - 2
+          - !If
+            - ReservedConcurrencyIs3
+            - 3
+            - !If
+              - ReservedConcurrencyIs4
+              - 4
+              - 5
+        - !Ref "AWS::NoValue"
       Description: Go API (#23) for the Notion wrapper (#10) and DayPlan (#6). JWT auth stays on the HTTP API authorizer.
       Environment:
         Variables:
@@ -478,3 +535,7 @@ Outputs:
   ApiLogGroupName:
     Description: CloudWatch Log Group for the API Lambda
     Value: !Ref ApiFunctionLogGroup
+
+  HttpApiAccessLogGroupName:
+    Description: CloudWatch Log Group for HTTP API access logs (14-day retention)
+    Value: !Ref HttpApiAccessLogGroup
