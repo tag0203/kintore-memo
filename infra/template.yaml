@@ -245,7 +245,9 @@ Resources:
           TABLE_NAME: !Ref AppTable
           NOTION_TOKEN_PARAM: !Sub /${ProjectName}/${Environment}/notion/token
           NOTION_DATABASE_ID_PARAM: !Sub /${ProjectName}/${Environment}/notion/database-id
-          ALLOWED_ORIGIN: !Sub https://${SpaDistribution.DomainName}
+          # Same value as API CORS. Do not GetAtt SpaDistribution: this function's
+          # HttpApi events, the CSP policy, and the distribution would cycle.
+          ALLOWED_ORIGIN: !Ref SpaAllowedOrigin
           ENVIRONMENT: !Ref Environment
       Events:
         HealthGet:

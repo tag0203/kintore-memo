@@ -181,6 +181,12 @@ describe("CloudFront response headers", () => {
     expect(cors).toContain("HasSpaAllowedOrigin");
     expect(cors).toContain("!Ref SpaAllowedOrigin");
     expect(cors).not.toContain("SpaDistribution");
+    const envStart = template.indexOf("Environment:\n        Variables:");
+    const envEnd = template.indexOf("Events:", envStart);
+    const env = template.slice(envStart, envEnd);
+    expect(env).toContain("ALLOWED_ORIGIN: !Ref SpaAllowedOrigin");
+    expect(env).not.toContain("!GetAtt SpaDistribution");
+    expect(env).not.toContain("${SpaDistribution.DomainName}");
     expect(template).toContain('AllowedPattern: "^$|^https://[a-z0-9]+\\\\.cloudfront\\\\.net$"');
   });
 });
