@@ -29,14 +29,16 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 
 checkout するコミットは `github.event.workflow_run.head_sha` です。`workflow_run` の `github.sha` はデフォルトブランチの先端であり、テストしたコミットとは限りません。
 
-同じ環境へのデプロイは concurrency group `deploy-<environment>` で重ねません。進行中のデプロイはキャンセルしません。自動実行は手動の `dev` と同じ `deploy-dev` に入ります。`staging` と `prod` の手動実行は別グループのままです。
+同じ環境へのデプロイは concurrency group `deploy-<environment>` で重ねません。進行中のデプロイはキャンセルしません。GitHub はこのグループの待ちを 1 本だけ残し、新しい run が待ちの run を置き換えます。置き換えられた run のアプリケーション変更は、実行される run が最後の成功デプロイとの差分で見るので、デプロイから落ちません。自動実行は手動の `dev` と同じ `deploy-dev` に入ります。`staging` と `prod` の手動実行は別グループのままです。
 
-`workflow_run` には `paths` フィルタがありません。CI は `push` の `github.event.before` を artifact `ci-push-before` に残します。workflow run の API にはその値がないためです。gate は `before` からテストした tip までの差分を見ます。tip だけがドキュメントでも、同じ push の途中にアプリケーション変更があれば、CI がテストした tip をデプロイします。
+`workflow_run` には `paths` フィルタがありません。gate は、GitHub Deployments の environment `dev` で最後に成功したデプロイの SHA から、テストした tip までの差分を見ます。push の `before` は使いません。CI がキャンセルされたり、`deploy-dev` の待ちが 1 本に置き換わったりしても、実行される run は未デプロイのアプリケーション変更を含んだ木をデプロイします。
 
-- その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけなら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
-- `before` が読めない、ゼロ SHA、リポジトリに無いオブジェクトのときは、範囲が分からないので tip をデプロイします
-- テストしたコミットより新しいコミットがアプリケーションファイルを変えているときは、古い SHA をデプロイしません。遅い CI が新しい `dev` を巻き戻さないためです。新しい方の CI が成功したときに、その SHA をデプロイします
-- 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします
+成功した `dev` の publish のあと、`record-dev-deployment` が同じ SHA で deployment を作り、status を `success` にします。このジョブに AWS 資格情報はありません。手動の `dev` も記録します。`staging` と `prod` は記録しません。これは `GITHUB_TOKEN` の `deployments: read` / `deployments: write` であり、OIDC ロールの権限は変わりません。
+
+- その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけ、または差分が空なら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
+- 成功記録が無い、API が読めない、SHA がリポジトリに無い、テストした SHA の祖先でないときは、範囲が分からないので tip をデプロイします
+- テストしたコミットより新しいコミットがアプリケーションファイルを変えているときは、古い SHA をデプロイしません。遅い run が新しい `dev` を巻き戻さないためです。新しい方の CI が成功したときに、その SHA をデプロイします
+- 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします。そのドキュメントコミットの run が先に実行された場合も、最後の成功デプロイ以降にアプリケーション変更があれば、その tip をデプロイします
 - 判定できない SHA（`main` の first-parent に無い、など）はデプロイしません。手動の `workflow_dispatch` はこの判定をしません
 
 ### 自動デプロイを一時的に止める
@@ -51,11 +53,12 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 | ジョブ | AWS / `id-token` | 内容 |
 | --- | --- | --- |
-| `gate` | なし | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV` と、テスト済み SHA がアプリケーション変更かどうかも見る |
+| `gate` | なし（`deployments: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV` と、最後に成功した dev デプロイ以降にアプリケーション変更があるかも見る |
 | `build` | なし | `sam build`。成果物を artifact へ |
 | `deploy-stack` | OIDC | 検証済み SAM 成果物を `sam deploy`。公開スタック出力だけを artifact へ |
 | `build-spa` | なし | `npm ci` / `npm run build` / `check:secrets`（公開 Cognito・API URL のみ） |
 | `publish-spa` | OIDC | `dist/` を S3 同期し CloudFront を無効化 |
+| `record-dev-deployment` | なし（`deployments: write`） | `dev` の publish 成功後に、その SHA を GitHub Deployments の environment `dev` へ記録する。`staging` / `prod` では動かない |
 
 `npm` の lifecycle やビルド依存が侵害されても、そのプロセスからは AWS 一時資格情報を読めません。ビルドを同じジョブの末尾へ移すだけでは不十分なため、資格情報付きジョブとは分けています。
 

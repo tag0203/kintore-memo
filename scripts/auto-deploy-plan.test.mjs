@@ -68,7 +68,7 @@ describe("planAutoDeploy", () => {
       expect(planAutoDeploy(repo, sha)).toEqual({
         deploy: true,
         sha,
-        reason: "push range is unknown, so deploy the tested tree",
+        reason: "last successful dev deploy is unknown, so deploy the tested tree",
       });
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -84,9 +84,9 @@ describe("planAutoDeploy", () => {
         { "README.md": "# hi\n", "docs/images/diagram.png": "png\n" },
         "docs",
       );
-      const plan = planAutoDeploy(repo, sha, "HEAD", { beforeSha: base });
+      const plan = planAutoDeploy(repo, sha, "HEAD", { lastDeployedSha: base });
       expect(plan.deploy).toBe(false);
-      expect(plan.reason).toBe("pushed range changes only docs or markdown");
+      expect(plan.reason).toBe("changes since the last successful dev deploy are only docs or markdown");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -99,10 +99,10 @@ describe("planAutoDeploy", () => {
       git(repo, ["commit", "--allow-empty", "-m", "empty"]);
       const sha = head(repo);
       const before = parentOf(repo, sha);
-      expect(planAutoDeploy(repo, sha, "HEAD", { beforeSha: before })).toMatchObject({
+      expect(planAutoDeploy(repo, sha, "HEAD", { lastDeployedSha: before })).toMatchObject({
         deploy: false,
         sha: "",
-        reason: "pushed range has no file changes",
+        reason: "no file changes since the last successful dev deploy",
       });
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -116,7 +116,7 @@ describe("planAutoDeploy", () => {
       commitFiles(repo, { "docs/aws-deploy.md": "# deploy\n" }, "docs");
       expect(planAutoDeploy(repo, app).deploy).toBe(true);
       expect(planAutoDeploy(repo, app).sha).toBe(app);
-      expect(planAutoDeploy(repo, head(repo), "HEAD", { beforeSha: app }).deploy).toBe(false);
+      expect(planAutoDeploy(repo, head(repo), "HEAD", { lastDeployedSha: app }).deploy).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -136,34 +136,101 @@ describe("planAutoDeploy", () => {
     }
   });
 
-  it("deploys the tested tip when an earlier commit in the same push changes the app", () => {
+  it("deploys a docs tip when the last successful deploy is before an application commit", () => {
     const repo = initRepo();
     try {
-      const before = commitFiles(repo, { "README.md": "# base\n" }, "base");
+      const deployed = commitFiles(repo, { "README.md": "# base\n" }, "base");
       commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
       const tip = commitFiles(repo, { "docs/aws-deploy.md": "# docs\n" }, "docs tip");
-      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: before })).toMatchObject({
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: deployed })).toMatchObject({
         deploy: true,
         sha: tip,
-        reason: "CI passed for this push and main has no newer application commit",
+        reason: "application files changed since the last successful dev deploy",
       });
-      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: parentOf(repo, tip) }).deploy).toBe(false);
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: parentOf(repo, tip) }).deploy).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });
 
-  it("deploys when the push baseline is missing or not in the repository", () => {
+  it("deploys the docs tip when an earlier application push's CI was cancelled", () => {
+    const repo = initRepo();
+    try {
+      const deployed = commitFiles(repo, { "src/app.ts": "export const base = 1;\n" }, "deployed");
+      const cancelled = commitFiles(repo, { "src/app.ts": "export const next = 2;\n" }, "app A");
+      const docsTip = commitFiles(repo, { "README.md": "# docs only\n" }, "docs B");
+      // B's push baseline would be A. That range is docs-only, but A never deployed.
+      expect(planAutoDeploy(repo, docsTip, "HEAD", { lastDeployedSha: cancelled }).deploy).toBe(false);
+      expect(planAutoDeploy(repo, docsTip, "HEAD", { lastDeployedSha: deployed })).toMatchObject({
+        deploy: true,
+        sha: docsTip,
+      });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("deploys a docs run that replaced a pending application deploy", () => {
+    const repo = initRepo();
+    try {
+      const deployed = commitFiles(repo, { "src/app.ts": "export {}\n" }, "deployed");
+      const pending = commitFiles(repo, { "src/pending.ts": "export {}\n" }, "app B");
+      const replacement = commitFiles(repo, { "docs/aws-deploy.md": "# docs\n" }, "docs C");
+      expect(planAutoDeploy(repo, replacement, "HEAD", { lastDeployedSha: pending }).deploy).toBe(false);
+      expect(planAutoDeploy(repo, replacement, "HEAD", { lastDeployedSha: deployed })).toMatchObject({
+        deploy: true,
+        sha: replacement,
+      });
+      expect(planAutoDeploy(repo, pending, "HEAD", { lastDeployedSha: deployed }).deploy).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a replaced older SHA when a newer application commit is on main", () => {
+    const repo = initRepo();
+    try {
+      const deployed = commitFiles(repo, { "README.md": "# base\n" }, "deployed");
+      const older = commitFiles(repo, { "src/older.ts": "older\n" }, "app B");
+      const newer = commitFiles(repo, { "src/newer.ts": "newer\n" }, "app D");
+      const olderPlan = planAutoDeploy(repo, older, "HEAD", { lastDeployedSha: deployed });
+      expect(olderPlan.deploy).toBe(false);
+      expect(olderPlan.reason).toContain(newer);
+      expect(planAutoDeploy(repo, newer, "HEAD", { lastDeployedSha: deployed })).toMatchObject({
+        deploy: true,
+        sha: newer,
+      });
+      expect(planAutoDeploy(repo, older, "HEAD", { lastDeployedSha: newer }).deploy).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("deploys when the last successful deploy is missing or not an ancestor", () => {
     const repo = initRepo();
     try {
       const base = commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
       const tip = commitFiles(repo, { "README.md": "# only docs\n" }, "docs");
+      git(repo, ["checkout", "-b", "diverged"]);
+      const diverged = commitFiles(repo, { "src/side.ts": "side\n" }, "side");
+      git(repo, ["checkout", "main"]);
       expect(planAutoDeploy(repo, tip).deploy).toBe(true);
-      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: "0".repeat(40) }).deploy).toBe(true);
-      expect(
-        planAutoDeploy(repo, tip, "HEAD", { beforeSha: "b".repeat(40) }),
-      ).toMatchObject({ deploy: true, sha: tip });
-      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: base }).deploy).toBe(false);
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: "0".repeat(40) }).deploy).toBe(true);
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: "not-a-sha" })).toMatchObject({
+        deploy: true,
+        sha: tip,
+        reason: "last successful dev deploy is unknown, so deploy the tested tree",
+      });
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: "b".repeat(40) })).toMatchObject({
+        deploy: true,
+        sha: tip,
+      });
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: diverged })).toMatchObject({
+        deploy: true,
+        sha: tip,
+        reason: "last successful dev deploy is not an ancestor of the tested SHA, so deploy the tested tree",
+      });
+      expect(planAutoDeploy(repo, tip, "HEAD", { lastDeployedSha: base }).deploy).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -215,8 +282,15 @@ describe("planAutoDeploy", () => {
       expect(JSON.parse(output)).toEqual({
         deploy: true,
         sha,
-        reason: "push range is unknown, so deploy the tested tree",
+        reason: "last successful dev deploy is unknown, so deploy the tested tree",
       });
+      const docs = commitFiles(repo, { "README.md": "# docs\n" }, "docs");
+      const skipped = execFileSync(
+        process.execPath,
+        [script, "--head-sha", docs, "--repo", repo, "--tip", "HEAD", "--last-deployed-sha", sha],
+        { encoding: "utf8" },
+      );
+      expect(JSON.parse(skipped)).toMatchObject({ deploy: false });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

@@ -9,7 +9,8 @@
 #
 # Automatic deploy: after the CI workflow succeeds for a push to main, publish dev
 # from that workflow's head SHA. Manual workflow_dispatch is unchanged (dev/staging/prod).
-# workflow_run cannot filter paths; the gate skips docs/markdown-only pushes.
+# workflow_run cannot filter paths. The gate skips when only docs or markdown
+# changed since the last successful dev deployment.
 # Pause automatic deploy with repository variable AUTO_DEPLOY_DEV=false.
 # That does not disable workflow_dispatch.
 
@@ -40,6 +41,11 @@ permissions: {}
 
 # Manual staging/prod keep their own groups. Automatic runs share deploy-dev
 # with a manual dev deploy. In-progress deploys are not cancelled.
+# GitHub keeps a single pending run in this group, so a later run replaces the
+# pending one. The run that executes diffs the tested SHA against the last
+# successful dev deployment, so a replaced run's application changes are still
+# published. An older SHA is skipped when a newer application commit is already
+# on main; that newer SHA is the one this group runs.
 concurrency:
   group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
   cancel-in-progress: false
@@ -71,8 +77,8 @@ jobs:
         )
       )
     permissions:
-      actions: read
       contents: read
+      deployments: read
     outputs:
       configured: ${{ steps.gate.outputs.configured }}
       environment: ${{ steps.gate.outputs.environment }}
@@ -87,17 +93,6 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Download the CI push baseline
-        if: github.event_name == 'workflow_run'
-        id: push-before
-        continue-on-error: true
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: ci-push-before
-          path: /tmp/ci-push-before
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ github.token }}
 
       - name: Skip until the OIDC role exists
         id: gate
@@ -181,18 +176,18 @@ jobs:
             # '+' accepts a force-push. The plan then refuses a SHA that is no longer on main.
             git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
               fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-            BEFORE_ARGS=()
-            if [ -f /tmp/ci-push-before/before.txt ]; then
-              PUSH_BEFORE="$(tr -d '[:space:]' < /tmp/ci-push-before/before.txt)"
-              if [[ "${PUSH_BEFORE}" =~ ^[0-9a-f]{40}$ ]] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
-                BEFORE_ARGS=(--before-sha "${PUSH_BEFORE}")
+            LAST_ARGS=()
+            # A failed or empty lookup deploys. Missing history must not skip the tree CI tested.
+            if LAST_DEPLOYED="$(node scripts/last-deployed.mjs)"; then
+              if [[ "${LAST_DEPLOYED}" =~ ^[0-9a-f]{40}$ ]]; then
+                LAST_ARGS=(--last-deployed-sha "${LAST_DEPLOYED}")
               else
-                echo "CI push baseline is unknown. Deploying the tested tree."
+                echo "No successful dev deployment is recorded. Deploying the tested tree."
               fi
             else
-              echo "CI push baseline artifact is missing. Deploying the tested tree."
+              echo "Could not read the last successful dev deployment. Deploying the tested tree."
             fi
-            PLAN_JSON="$(node scripts/auto-deploy-plan.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main "${BEFORE_ARGS[@]}")" \
+            PLAN_JSON="$(node scripts/auto-deploy-plan.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main "${LAST_ARGS[@]}")" \
               || { echo "Could not plan the automatic deploy."; exit 1; }
             echo "Auto-deploy plan: ${PLAN_JSON}"
             DEPLOY="$(node -e 'const plan=JSON.parse(process.argv[1]); if(plan.deploy!==true&&plan.deploy!==false) process.exit(2); if(plan.deploy&&!/^[0-9a-f]{40}$/.test(plan.sha)) process.exit(2); process.stdout.write(plan.deploy?"true":"false")' "${PLAN_JSON}")" \
@@ -627,3 +622,36 @@ jobs:
             --query "Invalidation.Id" \
             --output text)"
           echo "SPA synced. CloudFront invalidation: ${INVALIDATION_ID}"
+
+  record-dev-deployment:
+    name: Record successful dev deployment
+    needs: [gate, publish-spa]
+    if: success() && needs.gate.outputs.configured == 'true' && needs.gate.outputs.environment == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Reject long-lived AWS keys
+        run: |
+          set -euo pipefail
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+            echo "Recording a GitHub deployment must not see AWS credentials."
+            exit 1
+          fi
+
+      - name: Checkout the dev deployment recorder
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record the successful dev deployment
+        env:
+          DEPLOYED_SHA: ${{ needs.gate.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node scripts/last-deployed.mjs --record "${DEPLOYED_SHA}"

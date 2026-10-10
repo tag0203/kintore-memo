@@ -81,42 +81,73 @@ function firstParentLine(repo, tipSha) {
 }
 
 const ZERO_SHA = "0".repeat(40);
-const DEPLOY_REASON = "CI passed for this push and main has no newer application commit";
-const UNKNOWN_RANGE_REASON = "push range is unknown, so deploy the tested tree";
+const DEPLOY_REASON = "application files changed since the last successful dev deploy";
+const UNKNOWN_BASELINE_REASON = "last successful dev deploy is unknown, so deploy the tested tree";
+const NOT_ANCESTOR_REASON =
+  "last successful dev deploy is not an ancestor of the tested SHA, so deploy the tested tree";
 
 /**
- * Net files changed between the push baseline and the tested tip.
- * Missing or zero `before` is uncertain: the caller deploys.
+ * @param {string} repo
+ * @param {string} ancestor
+ * @param {string} descendant
+ * @returns {boolean | null} null when git cannot decide
+ */
+function commitIsAncestor(repo, ancestor, descendant) {
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
+      cwd: repo,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return true;
+  } catch (error) {
+    const status = error && typeof error === "object" && "status" in error ? error.status : null;
+    if (status === 1) return false;
+    return null;
+  }
+}
+
+/**
+ * Files changed since the last successful dev deploy.
+ * Unknown, missing, or non-ancestor baselines are not a docs-only skip.
  * @param {string} repo
  * @param {string} headSha
- * @param {string | null | undefined} beforeSha
- * @returns {{ uncertain: boolean, files: string[] }}
+ * @param {string | null | undefined} lastDeployedSha
+ * @returns {{ kind: "unknown" | "not-ancestor" | "diff", files: string[] }}
  */
-function pushRangeFiles(repo, headSha, beforeSha) {
-  if (beforeSha == null || beforeSha === "" || beforeSha === ZERO_SHA) {
-    return { uncertain: true, files: [] };
+function changesSinceLastDeploy(repo, headSha, lastDeployedSha) {
+  if (
+    lastDeployedSha == null ||
+    lastDeployedSha === "" ||
+    lastDeployedSha === ZERO_SHA ||
+    !SHA_RE.test(lastDeployedSha)
+  ) {
+    return { kind: "unknown", files: [] };
   }
-  assertSha(beforeSha);
-  const exists = git(repo, ["cat-file", "-e", `${beforeSha}^{commit}`], { allowFailure: true });
-  if (exists === null) return { uncertain: true, files: [] };
-  const output = git(repo, ["diff", "--name-only", "-z", beforeSha, headSha]);
-  return { uncertain: false, files: output.split("\0").filter(Boolean) };
+  const exists = git(repo, ["cat-file", "-e", `${lastDeployedSha}^{commit}`], { allowFailure: true });
+  if (exists === null) return { kind: "unknown", files: [] };
+  const ancestor = commitIsAncestor(repo, lastDeployedSha, headSha);
+  if (ancestor === null) return { kind: "unknown", files: [] };
+  if (!ancestor) return { kind: "not-ancestor", files: [] };
+  const output = git(repo, ["diff", "--name-only", "-z", lastDeployedSha, headSha]);
+  return { kind: "diff", files: output.split("\0").filter(Boolean) };
 }
 
 /**
  * Decide whether an automatic dev deploy should publish this CI SHA.
  * Manual workflow_dispatch does not call this.
  *
- * The docs-only check covers the whole push (`before`..`headSha`), not only
- * the tip commit. CI runs once per push, so an earlier application commit in
- * that push has no run of its own. Unknown range deploys the tested tip.
- * A newer application commit on main still skips, so a late run cannot roll
- * dev back.
+ * Docs-only is decided from the last successful dev deployment to `headSha`,
+ * not from the push that triggered CI. A cancelled CI run or a replaced
+ * pending deploy therefore cannot hide an application change: the run that
+ * actually executes still sees every undeployed application file.
+ * Unknown, unreachable, or non-ancestor baselines deploy the tested tip.
+ * A newer application commit on main still skips, so an older run cannot
+ * roll dev back and the newer SHA remains the one that deploys.
  *
  * @param {string} repo
  * @param {string} headSha commit CI tested (`workflow_run.head_sha`)
  * @param {string} [tip] revision for current main. Default HEAD.
- * @param {{ beforeSha?: string | null }} [options] push baseline (`github.event.before`)
+ * @param {{ lastDeployedSha?: string | null }} [options] last successful dev deployment
  * @returns {{ deploy: boolean, sha: string, reason: string }}
  */
 export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
@@ -146,18 +177,21 @@ export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
     };
   }
 
-  const range = pushRangeFiles(repo, headSha, options.beforeSha);
-  if (range.uncertain) {
-    return { deploy: true, sha: headSha, reason: UNKNOWN_RANGE_REASON };
+  const since = changesSinceLastDeploy(repo, headSha, options.lastDeployedSha);
+  if (since.kind === "unknown") {
+    return { deploy: true, sha: headSha, reason: UNKNOWN_BASELINE_REASON };
   }
-  if (range.files.length === 0) {
-    return { deploy: false, sha: "", reason: "pushed range has no file changes" };
+  if (since.kind === "not-ancestor") {
+    return { deploy: true, sha: headSha, reason: NOT_ANCESTOR_REASON };
   }
-  if (isDocsOnlyFileList(range.files)) {
+  if (since.files.length === 0) {
+    return { deploy: false, sha: "", reason: "no file changes since the last successful dev deploy" };
+  }
+  if (isDocsOnlyFileList(since.files)) {
     return {
       deploy: false,
       sha: "",
-      reason: "pushed range changes only docs or markdown",
+      reason: "changes since the last successful dev deploy are only docs or markdown",
     };
   }
 
@@ -165,17 +199,17 @@ export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
 }
 
 function parseArgs(argv) {
-  /** @type {{ headSha?: string, repo: string, tip: string, beforeSha?: string }} */
+  /** @type {{ headSha?: string, repo: string, tip: string, lastDeployedSha?: string }} */
   const args = { repo: ".", tip: "HEAD" };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
-    if (flag === "--head-sha" || flag === "--repo" || flag === "--tip" || flag === "--before-sha") {
+    if (flag === "--head-sha" || flag === "--repo" || flag === "--tip" || flag === "--last-deployed-sha") {
       if (!value || value.startsWith("-")) throw new Error(`${flag} requires a value`);
       if (flag === "--head-sha") args.headSha = value;
       if (flag === "--repo") args.repo = value;
       if (flag === "--tip") args.tip = value;
-      if (flag === "--before-sha") args.beforeSha = value;
+      if (flag === "--last-deployed-sha") args.lastDeployedSha = value;
       i += 1;
       continue;
     }
@@ -187,7 +221,7 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const plan = planAutoDeploy(args.repo, args.headSha, args.tip, { beforeSha: args.beforeSha });
+  const plan = planAutoDeploy(args.repo, args.headSha, args.tip, { lastDeployedSha: args.lastDeployedSha });
   process.stdout.write(`${JSON.stringify(plan)}\n`);
 }
 
