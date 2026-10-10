@@ -10,6 +10,8 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // main.tsx imports virtual:pwa-register. Do not inject another register script.
+      injectRegister: null,
       includeAssets: ["favicon.svg", "pwa-192.png", "pwa-512.png"],
       manifest: {
         name: "筋トレメモ",

@@ -23,6 +23,18 @@ Parameters:
     Default: 14
     AllowedValues: [7, 14]
     Description: CloudWatch Logs retention for the API Lambda. HTTP API access logs are fixed at 14 days.
+  # CORS must not GetAtt SpaDistribution. The response headers policy references
+  # this API (exact execute-api host in CSP), and the distribution references
+  # that policy. A GetAtt here would be a CloudFormation cycle.
+  SpaAllowedOrigin:
+    Type: String
+    Default: ""
+    AllowedPattern: "^$|^https://[a-z0-9]+\\.cloudfront\\.net$"
+    Description: >
+      https origin of this environment's CloudFront distribution, for API
+      Gateway CORS. The deploy workflow sets it from CloudFrontDomainName and
+      does not print it. Empty only on the first create, before the
+      distribution exists; the workflow deploys again once the domain exists.
   # 0 or empty omits ReservedConcurrentExecutions. A new account (including the
   # 2026-10 project signup) can have a concurrency quota of 10. Reserving any
   # executions fails unless at least 10 unreserved remain. See docs/aws-deploy.md.
@@ -38,6 +50,7 @@ Parameters:
       reservation first). See docs/aws-deploy.md.
 
 Conditions:
+  HasSpaAllowedOrigin: !Not [!Equals [!Ref SpaAllowedOrigin, ""]]
   HasReservedConcurrency: !Not
     - !Or
       - !Equals [!Ref ReservedConcurrency, ""]
@@ -94,7 +107,8 @@ Resources:
       SupportedIdentityProviders: [COGNITO]
       AccessTokenValidity: 1
       IdTokenValidity: 1
-      RefreshTokenValidity: 30
+      # Refresh tokens live in localStorage. Keep them shorter than the previous 30 days.
+      RefreshTokenValidity: 7
       TokenValidityUnits:
         AccessToken: hours
         IdToken: hours
@@ -171,11 +185,14 @@ Resources:
                 - !Ref UserPoolClient
             IdentitySource: $request.header.Authorization
       CorsConfiguration:
-        AllowOrigins:
-          - !Sub https://${SpaDistribution.DomainName}
-          # Local SPA (npm run dev / preview) against a deployed API
-          - http://localhost:5173
-          - http://localhost:4173
+        AllowOrigins: !If
+          - HasSpaAllowedOrigin
+          - - !Ref SpaAllowedOrigin
+            # Local SPA (npm run dev / preview) against a deployed API
+            - http://localhost:5173
+            - http://localhost:4173
+          - - http://localhost:5173
+            - http://localhost:4173
         AllowHeaders:
           - Authorization
           - Content-Type
@@ -285,7 +302,9 @@ Resources:
           TABLE_NAME: !Ref AppTable
           NOTION_TOKEN_PARAM: !Sub /${ProjectName}/${Environment}/notion/token
           NOTION_DATABASE_ID_PARAM: !Sub /${ProjectName}/${Environment}/notion/database-id
-          ALLOWED_ORIGIN: !Sub https://${SpaDistribution.DomainName}
+          # Same value as API CORS. Do not GetAtt SpaDistribution: this function's
+          # HttpApi events, the CSP policy, and the distribution would cycle.
+          ALLOWED_ORIGIN: !Ref SpaAllowedOrigin
           ENVIRONMENT: !Ref Environment
       Events:
         HealthGet:
@@ -363,6 +382,42 @@ Resources:
         SigningBehavior: always
         SigningProtocol: sigv4
 
+  # CSP connect-src uses !Ref HttpApi so the host is this stack's API only.
+  # No wildcard: an XSS could otherwise post the localStorage tokens to any
+  # execute-api host. worker-src and manifest-src stay 'self' for the PWA.
+  SpaResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub ${ProjectName}-${Environment}-security-headers
+        Comment: Security headers, CSP, and X-Robots-Tag for the SPA
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          ContentSecurityPolicy:
+            ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+            Override: true
+        CustomHeadersConfig:
+          Items:
+            - Header: X-Robots-Tag
+              Value: noindex, nofollow
+              Override: true
+        # Strips the S3 origin Server header (AmazonS3). CloudFront may still
+        # send its own Server value after removal.
+        RemoveHeadersConfig:
+          Items:
+            - Header: Server
+
   SpaDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -387,6 +442,7 @@ Resources:
           Compress: true
           # Managed-CachingOptimized
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SpaResponseHeadersPolicy
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 200
