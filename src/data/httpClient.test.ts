@@ -65,7 +65,7 @@ function installApi() {
       if (failBootstrap > 0) {
         failBootstrap -= 1;
         return Response.json(
-          { error: "Notion との通信に失敗しました", requestId: "req-boot-1" },
+          { error: "Notion との通信に失敗しました", requestId: "ZoG1fH0oIAMEjeg=" },
           { status: 502 },
         );
       }
@@ -275,7 +275,7 @@ describe("http workout client", () => {
       const workout = client();
       api.failNextBootstrap();
       await expect(workout.getPreviousLog("スクワット", date)).rejects.toThrow(
-        "Notion との通信に失敗しました（req-boot-1）",
+        "Notion との通信に失敗しました（ZoG1fH0oIAMEjeg=）",
       );
       await expect(workout.getPreviousLog("スクワット", date)).resolves.toMatchObject([
         { id: "squat-prev-light" },
@@ -315,8 +315,14 @@ describe("http workout client", () => {
     }
   });
 
-  it("does not append an ARN or account id supplied as requestId", async () => {
-    for (const requestId of ["arn:aws:iam::123456789012:root", "123456789012"]) {
+  it("does not append an ARN, account id, token, or Notion id supplied as requestId", async () => {
+    for (const requestId of [
+      "arn:aws:iam::123456789012:root",
+      "123456789012",
+      "ntn_" + "secretvalue",
+      "secret_" + "ABC123456",
+      "a1b2c3d4e5f64789a123ef1234567890",
+    ]) {
       vi.stubGlobal(
         "fetch",
         vi.fn(async () =>
@@ -342,14 +348,16 @@ describe("http workout client", () => {
       "fetch",
       vi.fn(async () =>
         Response.json(
-          { error: "サーバーでエラーが発生しました", requestId: "lambda-req-1" },
+          { error: "サーバーでエラーが発生しました", requestId: "11111111-2222-4333-8444-555555555555" },
           { status: 500 },
         ),
       ),
     );
     try {
       const workout = client();
-      await expect(workout.listExercises()).rejects.toThrow("サーバーでエラーが発生しました（lambda-req-1）");
+      await expect(workout.listExercises()).rejects.toThrow(
+        "サーバーでエラーが発生しました（11111111-2222-4333-8444-555555555555）",
+      );
     } finally {
       vi.unstubAllGlobals();
     }

@@ -9,9 +9,12 @@ describe("readRequestId", () => {
     expect(readRequestId("ZoG1fH0oIAMEjeg=")).toBe("ZoG1fH0oIAMEjeg=");
   });
 
-  it("drops an ARN and a bare account id", () => {
+  it("drops an ARN, an account id, a token, and a compact Notion id", () => {
     expect(readRequestId("arn:aws:iam::123456789012:root")).toBe("");
     expect(readRequestId("123456789012")).toBe("");
     expect(readRequestId("https://example.invalid/req")).toBe("");
+    expect(readRequestId("ntn_" + "secretvalue")).toBe("");
+    expect(readRequestId("secret_" + "ABC123456")).toBe("");
+    expect(readRequestId("a1b2c3d4e5f64789a123ef1234567890")).toBe("");
   });
 });
