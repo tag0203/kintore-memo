@@ -123,6 +123,8 @@ curl -sS \
 
 `infra/template.yaml` の CORS は CloudFront オリジンに加え `http://localhost:5173` と `http://localhost:4173` を許可しています。ローカルの SPA が `authorizedFetch` から記録 API と DayPlan の `PUT` を叩くときに使います。
 
+`/api/{proxy+}` は Go のハンドラが使う `GET` / `POST` / `PUT` だけです。`ANY` にすると `OPTIONS` もそのルートに一致し、JWT Authorizer が preflight を 401 にします。ブラウザは CORS ヘッダがあってもその応答を捨てます。`OPTIONS` 用のルートは置かず、HTTP API の `CorsConfiguration` が preflight に答えます。
+
 `sam local` では Cognito Authorizer は効きません（[aws-deploy.md](./aws-deploy.md)）。
 
 ## スコープ外

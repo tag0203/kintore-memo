@@ -10,7 +10,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | --- | --- |
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
-| API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `/api/*` は Authorizer 必須 |
+| API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `GET` / `POST` / `PUT /api/*` は Authorizer 必須。`OPTIONS` はルートにせず、`CorsConfiguration` が preflight に答える |
 | Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` はデプロイしない |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |

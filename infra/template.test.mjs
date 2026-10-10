@@ -51,14 +51,49 @@ describe("ApiFunction runtime", () => {
   });
 });
 
+function httpApiEvents() {
+  const start = template.indexOf("      Events:");
+  expect(start).toBeGreaterThan(-1);
+  const end = template.indexOf("      Tags:", start);
+  expect(end).toBeGreaterThan(start);
+  return template
+    .slice(start, end)
+    .split(/\n        (?=[A-Z])/)
+    .filter((block) => block.includes("Type: HttpApi"));
+}
+
 describe("HttpApi CORS", () => {
-  it("allows PUT so the browser can save a DayPlan", () => {
+  it("allows the methods the Go router serves, including preflight", () => {
     const start = template.indexOf("CorsConfiguration:");
     const end = template.indexOf("Tags:", start);
     const cors = template.slice(start, end);
-    expect(cors).toContain("- PUT");
-    expect(cors).toContain("- GET");
-    expect(cors).toContain("- OPTIONS");
+    for (const method of ["GET", "POST", "PUT", "OPTIONS"]) {
+      expect(cors).toContain(`- ${method}`);
+    }
+    // api/internal/httpapi has no DELETE or PATCH handlers.
+    expect(cors).not.toContain("- DELETE");
+    expect(cors).not.toContain("- PATCH");
+  });
+
+  it("uses explicit methods so OPTIONS is not authorized by the JWT authorizer", () => {
+    const events = httpApiEvents();
+    const health = events.find((block) => block.includes("Path: /api/health"));
+    expect(health).toBeDefined();
+    expect(health).toContain("Method: GET");
+    expect(health).toContain("Authorizer: NONE");
+
+    const proxy = events.filter((block) => block.includes("Path: /api/{proxy+}"));
+    expect(proxy.map((block) => block.match(/Method:\s*(\S+)/)?.[1]).sort()).toEqual([
+      "GET",
+      "POST",
+      "PUT",
+    ]);
+    for (const block of proxy) {
+      expect(block).toContain("Authorizer: CognitoJwtAuthorizer");
+      expect(block).not.toContain("Authorizer: NONE");
+    }
+    expect(events.some((block) => /Method:\s*ANY/.test(block))).toBe(false);
+    expect(events.some((block) => /Method:\s*OPTIONS/.test(block))).toBe(false);
   });
 });
 

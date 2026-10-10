@@ -135,6 +135,7 @@ Resources:
         AllowHeaders:
           - Authorization
           - Content-Type
+        # Go router (api/internal/httpapi) serves GET, POST, and PUT only.
         AllowMethods:
           - GET
           - POST
@@ -236,12 +237,32 @@ Resources:
             Method: GET
             Auth:
               Authorizer: NONE
-        ApiProxy:
+        # Explicit methods, not ANY. HTTP API CorsConfiguration answers OPTIONS
+        # only when no route matches it. ANY on /api/{proxy+} also matches
+        # OPTIONS, so the JWT authorizer returns 401 and browsers reject the
+        # preflight. Go handlers use GET, POST, and PUT (no DELETE or PATCH).
+        ApiGet:
           Type: HttpApi
           Properties:
             ApiId: !Ref HttpApi
             Path: /api/{proxy+}
-            Method: ANY
+            Method: GET
+            Auth:
+              Authorizer: CognitoJwtAuthorizer
+        ApiPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/{proxy+}
+            Method: POST
+            Auth:
+              Authorizer: CognitoJwtAuthorizer
+        ApiPut:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/{proxy+}
+            Method: PUT
             Auth:
               Authorizer: CognitoJwtAuthorizer
       Tags:
