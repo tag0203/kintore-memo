@@ -116,7 +116,36 @@ button, input { appearance: none; }
 }
 .text-input:focus, .field-row input:focus { border-color: var(--blue); outline: none; }
 
+.plan-edit-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22px;
+}
+.plan-edit-row h2 { margin: 0; font-size: 14px; font-weight: 700; }
+.plan-edit {
+  min-height: 44px;
+  padding: 8px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 700;
+}
 .plan { list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.plan-edit-row + .plan { margin-top: 0; }
+.plan-item { display: flex; flex-direction: column; gap: 8px; }
+.plan-remove {
+  width: 100%;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #f0c2c8;
+  background: #fff;
+  color: var(--danger);
+  font-size: 15px;
+  font-weight: 700;
+}
+.plan-remove:active { background: #fff5f6; }
 .exercise-card {
   width: 100%;
   display: flex;
