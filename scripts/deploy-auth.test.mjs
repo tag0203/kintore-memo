@@ -172,4 +172,25 @@ describe("deploy workflow token permissions", () => {
     expect(syncAt).toBeGreaterThan(maskPublishDistAt);
     expect(workflow).not.toContain("cat /tmp/spa-publish/env.txt");
   });
+
+  it("masks the CloudFront origin and API id before sam deploy prints parameter overrides", () => {
+    const samStep = workflow.slice(
+      workflow.indexOf("      - name: sam deploy\n"),
+      workflow.indexOf("      - name: Export public stack outputs for SPA build\n"),
+    );
+    const maskAt = samStep.indexOf('mask_value "https://${SPA_DOMAIN}"');
+    const planAt = samStep.indexOf("load_origin_plan before");
+    const deployAt = samStep.indexOf("\n          deploy_stack\n");
+    expect(maskAt).toBeGreaterThan(0);
+    expect(planAt).toBeGreaterThan(maskAt);
+    expect(deployAt).toBeGreaterThan(planAt);
+    expect(samStep).toContain('overrides+=("SpaAllowedOrigin=${SPA_ALLOWED_ORIGIN}")');
+    expect(samStep).not.toContain('echo "${SPA_ALLOWED_ORIGIN}"');
+    expect(samStep).not.toContain('echo "${SPA_DOMAIN}"');
+    expect(samStep).not.toContain('echo "${api_url}"');
+    expect(samStep).not.toContain('echo "${api_id}"');
+    expect(samStep).toContain("Could not read stack status.");
+    expect(samStep).not.toContain("cat ${ERR_FILE}");
+    expect(samStep).not.toContain('cat "${ERR_FILE}"');
+  });
 });

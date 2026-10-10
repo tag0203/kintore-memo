@@ -156,7 +156,7 @@ Deploy
 
 自動デプロイの `workflow_run` でも、この信頼のままで引き受けられます。このイベントはデフォルトブランチ（`main`）で動き、OIDC トークンを要求するのは引き続き `name: Deploy` の workflow です。そのため `sub` は上の `ref:refs/heads/main`、`workflow` は `Deploy` のままです。`event_name` は `workflow_run` になりますが、信頼条件は `event_name` を見ていません。reusable workflow ではないので `job_workflow_ref` は `deploy.yml@refs/heads/main` であり、条件には使っていません。
 
-CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。その場合 AWS が見る `workflow` は呼び出し元の `CI` になり、信頼の更新と、CI という名前の workflow からの引き受けが必要になります。信頼条件はこの自動デプロイのために変えていません。アクセスログと予約同時実行の権限を足したときは、下の手順で OIDC スタックを先に更新します。
+CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。その場合 AWS が見る `workflow` は呼び出し元の `CI` になり、信頼の更新と、CI という名前の workflow からの引き受けが必要になります。信頼条件はこの自動デプロイのために変えていません。アクセスログ、予約同時実行、CloudFront のレスポンスヘッダーポリシーの権限を足したときは、下の手順で OIDC スタックを先に更新します。
 
 ## 権限の範囲
 
@@ -172,7 +172,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 | HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージの `AccessLogSettings` 更新もこの `PATCH` / `PUT` に含まれる。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
 | アクセスログの配信 | `logs:CreateLogDelivery` / `GetLogDelivery` / `UpdateLogDelivery` / `DeleteLogDelivery` / `ListLogDeliveries` / `PutResourcePolicy` / `DescribeResourcePolicies`。これらはリソースタイプが無く、`PutResourcePolicy` と `DescribeResourcePolicies` は単一ロググループの ARN では権限にならないので `*`。有効化に必要な `logs:DescribeLogStreams` / `FilterLogEvents` / `GetLogEvents` はアクセスロググループ `/aws/apigateway/kintore-memo-*-http`（`GetLogEvents` 用に `:log-stream` 側の `:*` も）だけ。Lambda のロググループと `*` には付けない |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
-| CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
+| CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control。レスポンスヘッダーポリシーの作成（`CreateResponseHeadersPolicy`）も id が無いので `*`。取得・更新・削除（`GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy`）は `response-headers-policy/*` |
 
 意図的に外しているもの:
 
@@ -222,6 +222,8 @@ aws cloudformation describe-stacks \
 ```
 
 `UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。予約同時実行の値は `0` のままです。上げる手順は [aws-deploy.md](./aws-deploy.md) です。値を変えるだけなら、このスタックの再適用は要りません。
+
+同じファイルには、CloudFront のレスポンスヘッダーポリシー用に `cloudfront:CreateResponseHeadersPolicy`（リソース `*`）と、`response-headers-policy/*` への `GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy` も入っています。アクセスログ用にこのスタックを更新済みでも、その更新にはこの CloudFront 権限は含まれません。セキュリティヘッダーを `main` に入れる前に、上と同じコマンドをこのツリーで再実行し、`StackStatus` が `UPDATE_COMPLETE` であることを確認してください。確認は `StackStatus` だけです。ロール ARN は出しません。
 
 ## デプロイの実行
 

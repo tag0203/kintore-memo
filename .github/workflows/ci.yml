@@ -66,6 +66,9 @@ jobs:
       - name: Check secrets
         run: npm run check:secrets
 
+      - name: CSP smoke
+        run: node scripts/csp-smoke.mjs
+
   sam:
     name: sam validate and build
     runs-on: ubuntu-latest

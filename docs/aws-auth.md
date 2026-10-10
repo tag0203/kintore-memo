@@ -80,7 +80,7 @@ npm run dev
 - 自前フォームが Cognito の `USER_PASSWORD_AUTH` で IdToken / AccessToken / RefreshToken を取る
 - **API Gateway には IdToken** を `Authorization: Bearer …` で付ける（Authorizer の audience = App Client）
 - トークンは `localStorage` の `kintore-memo.auth.v1` に保存。ログアウトで消す
-- 期限切れ近くでは RefreshToken で IdToken を取り直す
+- 期限切れ近くでは RefreshToken で IdToken を取り直す。リフレッシュトークンは 7 日、アクセストークンと ID トークンは 1 時間です。既に発行済みのリフレッシュトークンは、発行時の期限まで有効です
 
 `src/auth/authorizedFetch.ts` がその付与の薄いラッパです。`src/data/httpClient.ts` の `WorkoutLogClient` が、起動時の bootstrap と保存の POST でこれを使います（#12）。DayPlan の読み書き（#6）もこれを使います。
 
