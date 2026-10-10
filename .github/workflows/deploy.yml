@@ -90,7 +90,9 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           # github.sha is the default-branch commit this workflow file came from.
-          # A later fetch updates origin/main without swapping the planner script.
+          # fetch-depth: 0 is the history of that SHA, not commits pushed while
+          # this run waited. A later fetch updates origin/main without swapping
+          # the planner script.
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
@@ -164,7 +166,10 @@ jobs:
             echo "This workflow only assumes the deploy role from refs/heads/main."
             exit 1
           fi
-          # Mask after the shape check so the ARN is not printed by later steps.
+          # Mask after the shape check so later steps do not print the ARN.
+          # This does not hide the env block above: the runner prints step env
+          # before add-mask. GITHUB_TOKEN cannot read Actions variables, so do not
+          # fetch the ARN from the variables API to mask it earlier.
           echo "::add-mask::${AWS_DEPLOY_ROLE_ARN}"
 
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -173,10 +178,22 @@ jobs:
           else
             ENVIRONMENT="dev"
             # See commits that landed after this workflow_run was queued.
-            # The token is masked; do not enable xtrace around this fetch.
+            # checkout's fetch-depth: 0 does not include them: its ref is github.sha.
+            # GitHub git smart HTTP does not accept a Bearer scheme for GITHUB_TOKEN
+            # and then prompts for a username (exit 128 with no TTY). Match
+            # actions/checkout: Basic x-access-token, base64, no line wrap.
+            # GITHUB_TOKEN is masked; the base64 form is a different string, so mask
+            # that too. Do not enable xtrace. The header lives only on this command.
             # '+' accepts a force-push. The plan then refuses a SHA that is no longer on main.
-            git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+            if [ -z "${GITHUB_TOKEN}" ]; then
+              echo "GITHUB_TOKEN is empty. Refusing to fetch origin/main."
+              exit 1
+            fi
+            GIT_AUTH_B64="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+            echo "::add-mask::${GIT_AUTH_B64}"
+            git -c "http.extraheader=AUTHORIZATION: basic ${GIT_AUTH_B64}" \
               fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            unset GIT_AUTH_B64
             LAST_ARGS=()
             # A failed or empty lookup deploys. Missing history must not skip the tree CI tested.
             if LAST_DEPLOYED="$(node scripts/last-deployed.mjs)"; then

@@ -49,11 +49,16 @@ describe("fetchPushCiConclusions", () => {
   it("records success and treats an HTTP error as unknown without echoing the token", async () => {
     const failed = "b".repeat(40);
     const path = "tag0203/kintore-memo";
-    /** @type {{ url: string }[]} */
+    /** @type {{ url: string, authorization: string | undefined }[]} */
     const calls = [];
     /** @type {typeof fetch} */
-    const fetchImpl = async (url) => {
-      calls.push({ url: String(url) });
+    const fetchImpl = async (url, init = {}) => {
+      const headers = init.headers;
+      const authorization =
+        headers && typeof headers === "object" && "Authorization" in headers
+          ? String(headers.Authorization)
+          : undefined;
+      calls.push({ url: String(url), authorization });
       if (String(url).includes(failed)) {
         return { ok: false, status: 401, json: async () => ({ message: TOKEN }) };
       }
@@ -68,6 +73,8 @@ describe("fetchPushCiConclusions", () => {
     ).resolves.toEqual({ [SHA]: "success", [failed]: "unknown" });
     expect(calls).toHaveLength(2);
     expect(calls[0].url).toContain(`/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${SHA}`);
-    expect(JSON.stringify(calls)).not.toContain(TOKEN);
+    expect(calls[0].authorization).toBe(`Bearer ${TOKEN}`);
+    expect(calls[0].url).not.toContain(TOKEN);
+    expect(JSON.stringify({ [SHA]: "success", [failed]: "unknown" })).not.toContain(TOKEN);
   });
 });

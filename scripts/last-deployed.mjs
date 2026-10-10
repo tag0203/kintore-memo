@@ -33,7 +33,11 @@ function repositoryPath(repository) {
   return `${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`;
 }
 
-/** @param {string} token */
+/**
+ * REST only. Git smart HTTP does not accept Bearer for GITHUB_TOKEN.
+ * deploy.yml sends Basic x-access-token for `git fetch`.
+ * @param {string} token
+ */
 function apiHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
