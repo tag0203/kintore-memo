@@ -144,6 +144,14 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const [dateOpen, setDateOpen] = useState(false);
   const [dateChoices, setDateChoices] = useState<SessionDateChoice[]>([]);
   const [pendingDate, setPendingDate] = useState<string | null>(null);
+  // 確認を出しているあいだは未送信の自動保存を止め、閉じたら再開する。
+  useEffect(() => {
+    if (pendingDate == null) return;
+    session.pauseAutoSave();
+    return () => {
+      session.resumeAutoSave();
+    };
+  }, [pendingDate, session.pauseAutoSave, session.resumeAutoSave]);
   // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
   useEffect(() => {
     if (session.finished || session.exercises.length === 0) setEditing(false);
@@ -199,6 +207,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
             setDateOpen(false);
             if (date === session.date) return;
             if (session.hasUnsavedEdits()) {
+              session.pauseAutoSave();
               setPendingDate(date);
               return;
             }

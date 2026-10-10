@@ -83,6 +83,10 @@ interface Session {
   hasUnsavedEdits: () => boolean;
   /** 保存の通信中。このあいだ「破棄して切り替える」は押せない。 */
   menuSaving: boolean;
+  /** 日付の確認を出しているあいだ、未送信の自動保存を止める。 */
+  pauseAutoSave: () => void;
+  /** 確認をキャンセルしたあと、残っている変更の自動保存を再開する。 */
+  resumeAutoSave: () => void;
   /**
    * clean: 未保存はない。save: 送れてから切り替える。discard: 送らずに切り替える。
    * 切り替えが終わるまで dateBusy。
@@ -234,6 +238,12 @@ export function SessionProvider({
   }, []);
 
   const hasUnsavedEdits = useCallback(() => saverRef.current?.dirty() ?? false, []);
+  const pauseAutoSave = useCallback(() => {
+    saverRef.current?.pause();
+  }, []);
+  const resumeAutoSave = useCallback(() => {
+    saverRef.current?.resume();
+  }, []);
 
   const applySwitchedDate = useCallback(
     (previous: string, next: string) => {
@@ -328,6 +338,8 @@ export function SessionProvider({
       date,
       hasUnsavedEdits,
       menuSaving,
+      pauseAutoSave,
+      resumeAutoSave,
       setDate,
       dateBusy,
       memo,
@@ -370,7 +382,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, menuSaving, saveError, saver, setDate]);
+  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, menuSaving, pauseAutoSave, resumeAutoSave, saveError, saver, setDate]);
 
   if (phase === "loading") {
     return (

@@ -38,6 +38,8 @@ export function createDayPlanSaver(
   const allowWrite = options.allowWrite ?? (() => true);
   let listeners: DayPlanSaverListeners = {};
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** 日付の確認ダイアログ中。タイマーは止めるが、flush と送信中のリクエストは止めない。 */
+  let paused = false;
   let latest: DayPlanInput | null = null;
   let savedKey = "";
   let inflight = 0;
@@ -88,6 +90,15 @@ export function createDayPlanSaver(
     return isCurrentSaved();
   }
 
+  function arm(): void {
+    if (paused || timer) return;
+    if (!latest || fingerprint(latest) === savedKey) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void flush();
+    }, waitMs);
+  }
+
   /** 最新のスナップショットが保存できたときだけ true。失敗しても latest は残す。 */
   function flush(): Promise<boolean> {
     if (timer) {
@@ -109,11 +120,24 @@ export function createDayPlanSaver(
         }
         return;
       }
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
+      if (timer) {
+        clearTimeout(timer);
         timer = null;
-        void flush();
-      }, waitMs);
+      }
+      arm();
+    },
+    /** 確認ダイアログのあいだ、まだ送っていない自動保存を止める。 */
+    pause() {
+      paused = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+    /** キャンセルしたあと、残っている変更の自動保存を再開する。 */
+    resume() {
+      paused = false;
+      arm();
     },
     /** The loaded plan is already on the server. Do not write it back. */
     markSaved(input: DayPlanInput) {

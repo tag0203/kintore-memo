@@ -168,6 +168,87 @@ describe("createDayPlanSaver", () => {
     expect(save).toHaveBeenCalledWith(plan("脚"));
   });
 
+  it("does not auto-save a debounced edit while the date dialog is open", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    await vi.advanceTimersByTimeAsync(200);
+    saver.pause();
+    saver.schedule(plan("胸"));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).not.toHaveBeenCalled();
+    expect(saver.dirty()).toBe(true);
+  });
+
+  it("discards a paused edit without sending it", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    saver.pause();
+    saver.dropPending();
+    saver.resume();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).not.toHaveBeenCalled();
+    expect(saver.dirty()).toBe(false);
+  });
+
+  it("resumes auto-save when the date dialog is cancelled", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    saver.pause();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).not.toHaveBeenCalled();
+    saver.resume();
+    await vi.advanceTimersByTimeAsync(399);
+    expect(save).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith(plan("脚"));
+  });
+
+  it("sends a paused edit when the user chooses to save", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    saver.pause();
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(saver.flush()).resolves.toBe(true);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith(plan("脚"));
+  });
+
+  it("does not cancel a request that already started when auto-save is paused", async () => {
+    let release: () => void = () => {
+      throw new Error("save did not start");
+    };
+    const save = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        release = () => resolve();
+      });
+    });
+    const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    const pending = saver.flush();
+    await Promise.resolve();
+    saver.pause();
+    expect(saver.saving()).toBe(true);
+    expect(saver.dirty()).toBe(true);
+    release();
+    await pending;
+    expect(save).toHaveBeenCalledWith(plan("脚"));
+    expect(saver.saving()).toBe(false);
+  });
+
   it("is not saving during the debounce wait, so an unsent edit can be dropped", async () => {
     vi.useFakeTimers();
     const save = vi.fn(async () => {});
