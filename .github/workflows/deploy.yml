@@ -406,18 +406,104 @@ jobs:
               exit 1
               ;;
           esac
+          STACK="kintore-memo-${ENVIRONMENT}"
+          trim() { printf '%s' "$1" | tr -d '\r\n'; }
+          read_output() {
+            aws cloudformation describe-stacks \
+              --region ap-northeast-1 \
+              --stack-name "${STACK}" \
+              --query "Stacks[0].Outputs[?OutputKey=='${1}'].OutputValue" \
+              --output text
+          }
+          # describe-stacks stdout is captured. Do not echo the domain or the API id.
+          STATUS_FILE="$(mktemp)"
+          ERR_FILE="$(mktemp)"
+          if aws cloudformation describe-stacks \
+            --region ap-northeast-1 \
+            --stack-name "${STACK}" \
+            --query "Stacks[0].StackStatus" \
+            --output text >"${STATUS_FILE}" 2>"${ERR_FILE}"; then
+            STACK_STATUS="$(tr -d '[:space:]' <"${STATUS_FILE}")"
+          else
+            if grep -q "does not exist" "${ERR_FILE}"; then
+              STACK_STATUS="ABSENT"
+            else
+              echo "Could not read stack status."
+              rm -f "${STATUS_FILE}" "${ERR_FILE}"
+              exit 1
+            fi
+          fi
+          rm -f "${STATUS_FILE}" "${ERR_FILE}"
+          mask_value() {
+            if [ -n "$1" ] && [ "$1" != "None" ]; then
+              echo "::add-mask::${1}"
+            fi
+          }
+          mask_api() {
+            local api_url api_id
+            api_url="$(trim "$(read_output HttpApiUrl 2>/dev/null || true)")"
+            api_url="${api_url%/}"
+            if [ -z "${api_url}" ] || [ "${api_url}" = "None" ]; then
+              return 0
+            fi
+            mask_value "${api_url}"
+            api_id="${api_url#https://}"
+            api_id="${api_id%%.*}"
+            mask_value "${api_id}"
+          }
+          load_origin_plan() {
+            PHASE="$1" OUT_PATH=/tmp/spa-origin.env \
+              STACK_STATUS="${STACK_STATUS}" SPA_DOMAIN="${SPA_DOMAIN}" PREVIOUS_ORIGIN="${SPA_ALLOWED_ORIGIN}" \
+              node "${GITHUB_WORKSPACE}/scripts/spa-origin-plan.mjs"
+            # shellcheck disable=SC1091
+            source /tmp/spa-origin.env
+            rm -f /tmp/spa-origin.env
+          }
+          SPA_ALLOWED_ORIGIN=""
+          SPA_DOMAIN=""
+          if [ "${STACK_STATUS}" != "ABSENT" ]; then
+            SPA_DOMAIN="$(trim "$(read_output CloudFrontDomainName 2>/dev/null || true)")"
+            mask_value "${SPA_DOMAIN}"
+            if [ -n "${SPA_DOMAIN}" ] && [ "${SPA_DOMAIN}" != "None" ]; then
+              mask_value "https://${SPA_DOMAIN}"
+            fi
+            mask_api
+          fi
+          load_origin_plan before
           # Drop the stack Outputs table. pipefail still fails the step when sam fails.
           # Progress and error lines stay. Values are read later with describe-stacks.
-          sam deploy \
-            --template-file .aws-sam/build/template.yaml \
-            --region ap-northeast-1 \
-            --stack-name "kintore-memo-${ENVIRONMENT}" \
-            --resolve-s3 \
-            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
-            --no-confirm-changeset \
-            --no-fail-on-empty-changeset \
-            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14" \
-            2>&1 | node "${GITHUB_WORKSPACE}/scripts/filter-sam-deploy-log.mjs"
+          deploy_stack() {
+            local -a overrides
+            overrides=(
+              "ProjectName=kintore-memo"
+              "Environment=${ENVIRONMENT}"
+              "LogRetentionDays=14"
+            )
+            if [ -n "${SPA_ALLOWED_ORIGIN}" ]; then
+              overrides+=("SpaAllowedOrigin=${SPA_ALLOWED_ORIGIN}")
+            fi
+            sam deploy \
+              --template-file .aws-sam/build/template.yaml \
+              --region ap-northeast-1 \
+              --stack-name "${STACK}" \
+              --resolve-s3 \
+              --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+              --no-confirm-changeset \
+              --no-fail-on-empty-changeset \
+              --parameter-overrides "${overrides[@]}" \
+              2>&1 | node "${GITHUB_WORKSPACE}/scripts/filter-sam-deploy-log.mjs"
+          }
+          deploy_stack
+          SPA_DOMAIN="$(trim "$(read_output CloudFrontDomainName)")"
+          mask_value "${SPA_DOMAIN}"
+          if [ -n "${SPA_DOMAIN}" ] && [ "${SPA_DOMAIN}" != "None" ]; then
+            mask_value "https://${SPA_DOMAIN}"
+          fi
+          mask_api
+          load_origin_plan after
+          if [ "${SPA_ORIGIN_AGAIN}" = "1" ]; then
+            deploy_stack
+          fi
           echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
 
       - name: Export public stack outputs for SPA build

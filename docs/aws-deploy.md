@@ -67,7 +67,9 @@ sam build
 sam deploy
 ```
 
-`sam deploy` は `samconfig.toml` の既定でスタック名 `kintore-memo-dev` を作ります。別環境にするときは例:
+`sam deploy` は `samconfig.toml` の既定でスタック名 `kintore-memo-dev` を作ります。API の CORS に載せる CloudFront オリジンはパラメータ `SpaAllowedOrigin` です（`https://` + `CloudFrontDomainName`）。ディストリビューションを `GetAtt` しないのは、CSP がこの API を参照し、ディストリビューションがそのポリシーを参照するためです。既にあるスタックへ手元で出すときは、空のままにすると CORS からそのオリジンが外れます。Actions の Deploy は出力をログに出さず、この値を渡します。初回作成でドメインがまだ無いときだけ空で一度出し、ドメインが出来てからもう一度出します。
+
+別環境にするときは例:
 
 ```bash
 sam deploy \

@@ -51,4 +51,34 @@ describe("GitHub OIDC bootstrap", () => {
     expect(policy).not.toContain('Resource: "*"');
     expect(policy).toContain("W3037");
   });
+
+  it("lets the deploy role manage response headers policies in this account only", () => {
+    const create = template.slice(
+      template.indexOf("Sid: CloudFrontCreateResponseHeadersPolicy"),
+      template.indexOf("Sid: CloudFrontResponseHeadersPolicies"),
+    );
+    expect(create).toContain("cloudfront:CreateResponseHeadersPolicy");
+    expect(create).toContain('Resource: "*"');
+    expect(create).not.toContain("GetResponseHeadersPolicy");
+    expect(create).not.toContain("UpdateResponseHeadersPolicy");
+    expect(create).not.toContain("DeleteResponseHeadersPolicy");
+
+    const manage = template.slice(
+      template.indexOf("Sid: CloudFrontResponseHeadersPolicies"),
+      template.indexOf("Sid: DenyNotionParameterAccess"),
+    );
+    for (const action of [
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:GetResponseHeadersPolicyConfig",
+      "cloudfront:UpdateResponseHeadersPolicy",
+      "cloudfront:DeleteResponseHeadersPolicy",
+    ]) {
+      expect(manage).toContain(action);
+    }
+    expect(manage).toContain(
+      "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:response-headers-policy/*",
+    );
+    expect(manage).not.toContain('Resource: "*"');
+    expect(manage).not.toContain("ListResponseHeadersPolicies");
+  });
 });

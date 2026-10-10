@@ -171,7 +171,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
 | HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
-| CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
+| CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control。レスポンスヘッダーポリシーの作成（`CreateResponseHeadersPolicy`）も id が無いので `*`。取得・更新・削除（`GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy`）は `response-headers-policy/*` |
 
 意図的に外しているもの:
 

@@ -404,6 +404,21 @@ Resources:
                   - cloudfront:UpdateOriginAccessControl
                   - cloudfront:DeleteOriginAccessControl
                 Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:origin-access-control/*
+              # Create has no resource type yet, same as CreateDistribution.
+              # Get/Update/Delete stay on this account's response headers policies.
+              - Sid: CloudFrontCreateResponseHeadersPolicy
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateResponseHeadersPolicy
+                Resource: "*"
+              - Sid: CloudFrontResponseHeadersPolicies
+                Effect: Allow
+                Action:
+                  - cloudfront:GetResponseHeadersPolicy
+                  - cloudfront:GetResponseHeadersPolicyConfig
+                  - cloudfront:UpdateResponseHeadersPolicy
+                  - cloudfront:DeleteResponseHeadersPolicy
+                Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:response-headers-policy/*
               - Sid: DenyNotionParameterAccess
                 Effect: Deny
                 Action:

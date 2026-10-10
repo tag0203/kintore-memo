@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { extractCspSub, inlineDocumentViolations, renderCsp } from "../scripts/csp-policy.mjs";
 
 const PARTITION_KEY = "pk";
 const SORT_KEY = "sk";
@@ -121,5 +122,75 @@ describe("ApiFunction DynamoDB IAM", () => {
       expect(policy).not.toContain(action);
     }
     expect(template).not.toContain("dynamodb:Scan");
+  });
+});
+
+describe("Cognito token lifetimes", () => {
+  it("keeps access and id tokens at 1 hour and shortens refresh tokens to 7 days", () => {
+    const start = template.indexOf("UserPoolClient:");
+    const end = template.indexOf("AppTable:", start);
+    const client = template.slice(start, end);
+    expect(client).toContain("AccessTokenValidity: 1");
+    expect(client).toContain("IdTokenValidity: 1");
+    expect(client).toContain("RefreshTokenValidity: 7");
+    expect(client).not.toContain("RefreshTokenValidity: 30");
+    expect(client).toContain("AccessToken: hours");
+    expect(client).toContain("IdToken: hours");
+    expect(client).toContain("RefreshToken: days");
+  });
+});
+
+describe("CloudFront response headers", () => {
+  it("attaches a custom policy with HSTS, frame denial, nosniff, referrer policy, and robots", () => {
+    expect(template.match(/Type: AWS::CloudFront::ResponseHeadersPolicy/g)).toHaveLength(1);
+    expect(template).toContain("ResponseHeadersPolicyId: !Ref SpaResponseHeadersPolicy");
+    const start = template.indexOf("SpaResponseHeadersPolicy:");
+    const end = template.indexOf("SpaDistribution:", start);
+    const policy = template.slice(start, end);
+    expect(policy).toContain("StrictTransportSecurity:");
+    expect(policy).toContain("AccessControlMaxAgeSec: 31536000");
+    expect(policy).toContain("IncludeSubdomains: true");
+    expect(policy).not.toContain("Preload:");
+    expect(policy).toContain("ContentTypeOptions:");
+    expect(policy).toContain("FrameOption: DENY");
+    expect(policy).toContain("ReferrerPolicy: strict-origin-when-cross-origin");
+    expect(policy).toContain("Header: X-Robots-Tag");
+    expect(policy).toContain("Value: noindex, nofollow");
+    expect(policy).toContain("RemoveHeadersConfig:");
+    expect(policy).toContain("Header: Server");
+    expect(policy).not.toContain("XSSProtection");
+  });
+
+  it("derives an exact CSP for this API, Cognito, the service worker, and the manifest", () => {
+    const sub = extractCspSub(template);
+    expect(sub).toContain("${HttpApi}");
+    expect(sub).toContain("${AWS::Region}");
+    expect(sub).not.toContain("*");
+    const csp = renderCsp(sub, "ap-northeast-1", "a1b2c3d4e5");
+    expect(csp).toBe(
+      "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self' https://cognito-idp.ap-northeast-1.amazonaws.com https://a1b2c3d4e5.execute-api.ap-northeast-1.amazonaws.com; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'",
+    );
+    expect(csp).not.toContain("unsafe-inline");
+    expect(csp).not.toContain("unsafe-eval");
+  });
+
+  it("does not reference the distribution from API CORS, which would cycle with the CSP", () => {
+    const start = template.indexOf("CorsConfiguration:");
+    const end = template.indexOf("Tags:", start);
+    const cors = template.slice(start, end);
+    expect(cors).toContain("HasSpaAllowedOrigin");
+    expect(cors).toContain("!Ref SpaAllowedOrigin");
+    expect(cors).not.toContain("SpaDistribution");
+    expect(template).toContain('AllowedPattern: "^$|^https://[a-z0-9]+\\\\.cloudfront\\\\.net$"');
+  });
+});
+
+describe("search engine blocking", () => {
+  it("disallows all crawlers in robots.txt and the document", () => {
+    const robots = readFileSync(new URL("../public/robots.txt", import.meta.url), "utf8");
+    expect(robots).toBe("User-agent: *\nDisallow: /\n");
+    const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
+    expect(html).toContain('<meta name="robots" content="noindex, nofollow" />');
+    expect(inlineDocumentViolations(html)).toEqual([]);
   });
 });
