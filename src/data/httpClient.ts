@@ -3,6 +3,7 @@ import { isDifficulty, toISODate, type ExerciseLog, type ExerciseSummary, type N
 import type { WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { chronological } from "./logRows";
+import { requestIdFromPayload } from "./requestId";
 
 /**
  * API Gateway 向けの WorkoutLogClient。
@@ -53,15 +54,6 @@ const SERVER_FAULTS = new Set([
   "処理に失敗しました",
 ]);
 
-/** API Gateway / Lambda の request ID。URL や ARN は通さない。 */
-const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-
-function readRequestId(payload: unknown): string {
-  if (!isRecord(payload) || typeof payload.requestId !== "string") return "";
-  const id = payload.requestId.trim();
-  return SAFE_REQUEST_ID.test(id) ? id : "";
-}
-
 function withRequestId(message: string, requestId: string): string {
   return requestId ? `${message}（${requestId}）` : message;
 }
@@ -72,7 +64,7 @@ function messageFrom(payload: unknown, status: number, fallback: string): string
     if (isRecord(payload) && typeof payload.error === "string" && SERVER_FAULTS.has(payload.error)) {
       message = payload.error;
     }
-    return withRequestId(message, readRequestId(payload));
+    return withRequestId(message, requestIdFromPayload(payload));
   }
   if (isRecord(payload)) {
     if (typeof payload.error === "string" && payload.error.trim()) return payload.error;

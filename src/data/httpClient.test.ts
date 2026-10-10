@@ -315,6 +315,28 @@ describe("http workout client", () => {
     }
   });
 
+  it("does not append an ARN or account id supplied as requestId", async () => {
+    for (const requestId of ["arn:aws:iam::123456789012:root", "123456789012"]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ error: "サーバーでエラーが発生しました", requestId }, { status: 500 }),
+        ),
+      );
+      try {
+        await client().listExercises();
+        expect.fail("expected an error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toBe("サーバーでエラーが発生しました");
+        expect((error as Error).message).not.toContain("arn:");
+        expect((error as Error).message).not.toContain("123456789012");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
   it("appends a safe requestId to the fixed 5xx message", async () => {
     vi.stubGlobal(
       "fetch",

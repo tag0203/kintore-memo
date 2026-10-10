@@ -1,5 +1,6 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
 import { DAY_PLAN_EXERCISE_INVALID, DAY_PLAN_EXERCISE_TOO_LONG } from "./exerciseName";
+import { requestIdFromPayload } from "./requestId";
 
 /** 画面のセッションのうち、DayPlan に載せる分。重量・回数・セット・きつさは含めない。 */
 export interface DayPlanInput {
@@ -54,17 +55,6 @@ const ERROR_TEXT: Record<string, string> = {
   method_not_allowed: "メニューを保存できませんでした",
 };
 
-/** API Gateway / Lambda の request ID。URL や ARN は通さない。 */
-const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
-
-function readRequestId(payload: unknown): string {
-  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return "";
-  const value = (payload as { requestId?: unknown }).requestId;
-  if (typeof value !== "string") return "";
-  const id = value.trim();
-  return SAFE_REQUEST_ID.test(id) ? id : "";
-}
-
 function messageFor(code: string, status: number, fallback: string, requestId = ""): string {
   let message = ERROR_TEXT[code];
   if (!message) {
@@ -82,7 +72,7 @@ async function readError(response: Response, fallback: string): Promise<DayPlanR
   try {
     const payload = (await response.json()) as { error?: unknown; requestId?: unknown };
     if (typeof payload.error === "string" && payload.error) code = payload.error;
-    requestId = readRequestId(payload);
+    requestId = requestIdFromPayload(payload);
   } catch {
     // 本文が JSON でないときも、ステータスから文言を選ぶ。
   }

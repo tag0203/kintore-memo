@@ -129,4 +129,31 @@ describe("createHttpDayPlanClient", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("does not append an ARN or account id supplied as requestId", async () => {
+    for (const requestId of ["arn:aws:iam::123456789012:root", "123456789012"]) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({ error: "storage", message: "raw", requestId }),
+              { status: 502 },
+            ),
+        ),
+      );
+      try {
+        await client().load("2026-10-02");
+        expect.fail("expected an error");
+      } catch (error) {
+        expect(error).toBeInstanceOf(DayPlanRequestError);
+        const fault = error as DayPlanRequestError;
+        expect(fault.message).toBe("メニューの保存先に接続できませんでした");
+        expect(fault.message).not.toContain("arn:");
+        expect(fault.message).not.toContain("123456789012");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
 });
