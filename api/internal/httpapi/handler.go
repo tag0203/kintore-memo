@@ -9,10 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -27,12 +25,6 @@ import (
 	"github.com/tag0203/kintore-memo/api/internal/secrets"
 	"github.com/tag0203/kintore-memo/api/internal/syntax"
 	"github.com/tag0203/kintore-memo/api/internal/validate"
-)
-
-var (
-	bearerPattern = regexp.MustCompile(`(?i)Bearer\s+\S+`)
-	ntnPattern    = regexp.MustCompile(`ntn_[A-Za-z0-9]+`)
-	secretPattern = regexp.MustCompile(`secret_[A-Za-z0-9]+`)
 )
 
 // Deps wires the handler. Tests pass fakes and leave AWS nil.
@@ -128,7 +120,7 @@ func (h *Handler) Handle(ctx context.Context, event events.APIGatewayV2HTTPReque
 
 	body, status, err := h.route(ctx, event, method, path)
 	if err != nil {
-		return notionError(err), nil
+		return h.notionError(ctx, event, err), nil
 	}
 	if status == 0 {
 		return jsonResponse(404, map[string]string{"error": "見つかりません"}), nil
@@ -248,11 +240,8 @@ func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HT
 	}
 	store, err := h.dayPlanStore()
 	if err != nil {
-		log.Printf("day plan failed %T", err)
-		return jsonResponse(502, map[string]string{
-			"error":   "storage",
-			"message": "DayPlan の読み書きに失敗しました",
-		})
+		id := logServerError(ctx, event, "day plan failed", err, "DayPlan の読み書きに失敗しました")
+		return jsonResponse(502, dayPlanFault(id))
 	}
 	var result model.DayPlan
 	if method == "GET" {
@@ -288,11 +277,8 @@ func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HT
 				})
 			}
 		}
-		log.Printf("day plan failed %T", err)
-		return jsonResponse(502, map[string]string{
-			"error":   "storage",
-			"message": "DayPlan の読み書きに失敗しました",
-		})
+		id := logServerError(ctx, event, "day plan failed", err, "DayPlan の読み書きに失敗しました")
+		return jsonResponse(502, dayPlanFault(id))
 	}
 	return jsonResponse(200, result)
 }
@@ -438,35 +424,15 @@ func jwtSubject(event events.APIGatewayV2HTTPRequest) string {
 	return auth.JWT.Claims["sub"]
 }
 
-func notionError(err error) events.APIGatewayV2HTTPResponse {
-	var invalid *validate.Error
-	if errors.As(err, &invalid) {
-		return jsonResponse(400, map[string]string{"error": invalid.Error()})
+func dayPlanFault(requestID string) map[string]string {
+	body := map[string]string{
+		"error":   "storage",
+		"message": "DayPlan の読み書きに失敗しました",
 	}
-	var syntaxErr *syntax.Error
-	if errors.As(err, &syntaxErr) {
-		return jsonResponse(400, map[string]string{"error": "JSON を確認してください"})
+	if requestID != "" {
+		body["requestId"] = requestID
 	}
-	message := publicMessage(err)
-	return jsonResponse(statusFor(message), map[string]string{"error": message})
-}
-
-func publicMessage(err error) string {
-	message := "処理に失敗しました"
-	if err != nil && err.Error() != "" {
-		message = err.Error()
-	}
-	message = bearerPattern.ReplaceAllString(message, "Bearer [redacted]")
-	message = ntnPattern.ReplaceAllString(message, "[redacted]")
-	message = secretPattern.ReplaceAllString(message, "[redacted]")
-	return message
-}
-
-func statusFor(message string) int {
-	if strings.Contains(message, "設定されていません") || strings.Contains(message, "設定がありません") {
-		return 500
-	}
-	return 502
+	return body
 }
 
 func jsonResponse(status int, body any, headerPairs ...string) events.APIGatewayV2HTTPResponse {
@@ -476,7 +442,7 @@ func jsonResponse(status int, body any, headerPairs ...string) events.APIGateway
 	}
 	raw, err := marshalJSON(body)
 	if err != nil {
-		raw = []byte(`{"error":"処理に失敗しました"}`)
+		raw = []byte(`{"error":"サーバーでエラーが発生しました"}`)
 		status = 500
 	}
 	return events.APIGatewayV2HTTPResponse{StatusCode: status, Headers: headers, Body: string(raw)}

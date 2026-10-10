@@ -54,22 +54,40 @@ const ERROR_TEXT: Record<string, string> = {
   method_not_allowed: "メニューを保存できませんでした",
 };
 
-function messageFor(code: string, status: number, fallback: string): string {
-  if (ERROR_TEXT[code]) return ERROR_TEXT[code];
-  if (status === 401) return "ログインが必要です";
-  if (status >= 500) return "メニューの保存先に接続できませんでした";
-  return fallback;
+/** API Gateway / Lambda の request ID。URL や ARN は通さない。 */
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function readRequestId(payload: unknown): string {
+  if (payload == null || typeof payload !== "object" || Array.isArray(payload)) return "";
+  const value = (payload as { requestId?: unknown }).requestId;
+  if (typeof value !== "string") return "";
+  const id = value.trim();
+  return SAFE_REQUEST_ID.test(id) ? id : "";
+}
+
+function messageFor(code: string, status: number, fallback: string, requestId = ""): string {
+  let message = ERROR_TEXT[code];
+  if (!message) {
+    if (status === 401) message = "ログインが必要です";
+    else if (status >= 500) message = "メニューの保存先に接続できませんでした";
+    else message = fallback;
+  }
+  if (status >= 500 && requestId) return `${message}（${requestId}）`;
+  return message;
 }
 
 async function readError(response: Response, fallback: string): Promise<DayPlanRequestError> {
   let code = "request_failed";
+  let requestId = "";
   try {
-    const payload = (await response.json()) as { error?: unknown };
+    const payload = (await response.json()) as { error?: unknown; requestId?: unknown };
     if (typeof payload.error === "string" && payload.error) code = payload.error;
+    requestId = readRequestId(payload);
   } catch {
     // 本文が JSON でないときも、ステータスから文言を選ぶ。
   }
-  return new DayPlanRequestError(messageFor(code, response.status, fallback), response.status, code);
+  if (response.status >= 500 && !ERROR_TEXT[code]) code = "storage";
+  return new DayPlanRequestError(messageFor(code, response.status, fallback, requestId), response.status, code);
 }
 
 function readSnapshot(value: unknown): DayPlanSnapshot {

@@ -87,6 +87,8 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | GET | `/api/day-plan?date=YYYY-MM-DD` | そのユーザーのその日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
 | PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。ログイン済みの画面が呼ぶ |
 
+入力チェック（400）の `error` は、これまでどおり具体的な文言です。Notion・SSM・通信障害などそれ以外は、固定の文言（`Notion との通信に失敗しました` または `サーバーでエラーが発生しました`）と相関用の `requestId` だけを返します。上流（Notion / AWS / ネットワーク）は 502、設定不足やその他の障害は 500 です。ARN、アカウント ID、Notion の ID、URL、トークンは応答に入れません。調査用の詳細は伏せ字にして CloudWatch に残します。画面は 5xx の生テキストを出さず、この固定文言と `requestId` を表示します。
+
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 
 レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。`POST /api/logs` のあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、Go の `api/internal/ddb` が組み立てます。

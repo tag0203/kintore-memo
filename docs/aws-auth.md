@@ -117,7 +117,7 @@ curl -sS \
 # 200。項目が無ければ memo は空、exercises は []
 ```
 
-未認証が 401、認証後の記録 API が 200 か 500 か 502、DayPlan が 200 なら、JWT Authorizer は期待どおりです。Lambda に別の認証処理はありません。
+未認証が 401、認証後の記録 API が 200 か 500 か 502、DayPlan が 200 なら、JWT Authorizer は期待どおりです。500 と 502 の本文は固定の日本語と `requestId` だけで、ARN や Notion の ID は含みません。Lambda に別の認証処理はありません。
 
 ## ローカル SPA × デプロイ済み API
 

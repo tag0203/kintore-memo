@@ -114,9 +114,11 @@ export async function handleRequest(
     return json(env, { error: "見つかりません" }, 404);
   } catch (error) {
     if (error instanceof SyntaxError) return badRequest(env, "JSON を確認してください");
-    const message = error instanceof Error ? error.message : "処理に失敗しました";
-    const status = message.includes("設定されていません") ? 500 : 502;
-    return json(env, { error: message }, status);
+    const raw = error instanceof Error ? error.message : "";
+    if (raw.includes("設定されていません") || raw.includes("設定がありません")) {
+      return json(env, { error: "サーバーでエラーが発生しました" }, 500);
+    }
+    return json(env, { error: "Notion との通信に失敗しました" }, 502);
   }
 }
 
