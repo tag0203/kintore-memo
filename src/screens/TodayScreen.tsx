@@ -86,6 +86,7 @@ export function SessionDatePicker({
   choices,
   open,
   notice,
+  busy = false,
   onToggle,
   onSelect,
   onDismissNotice,
@@ -94,6 +95,8 @@ export function SessionDatePicker({
   choices: readonly SessionDateChoice[];
   open: boolean;
   notice: string | null;
+  /** 保存待ちのあいだは、別の日付を選べない。 */
+  busy?: boolean;
   onToggle: () => void;
   onSelect: (date: string) => void;
   onDismissNotice: () => void;
@@ -105,6 +108,8 @@ export function SessionDatePicker({
         className="today-date-btn"
         aria-expanded={open}
         aria-controls="session-date-choices"
+        aria-busy={busy}
+        disabled={busy}
         onClick={onToggle}
       >
         <span>{formatJapaneseDate(date)}</span>
@@ -120,6 +125,7 @@ export function SessionDatePicker({
               type="button"
               className={choice.date === date ? "date-choice is-selected" : "date-choice"}
               aria-pressed={choice.date === date}
+              disabled={busy}
               onClick={() => onSelect(choice.date)}
             >
               <span className="date-choice-label">{choice.label}</span>
@@ -194,8 +200,13 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           choices={dateChoices}
           open={dateOpen}
           notice={session.dateNotice}
-          onToggle={() => setDateOpen((value) => !value)}
+          busy={session.dateBusy}
+          onToggle={() => {
+            if (session.dateBusy) return;
+            setDateOpen((value) => !value);
+          }}
           onSelect={(date) => {
+            if (session.dateBusy) return;
             setDateOpen(false);
             void session.setDate(date);
           }}

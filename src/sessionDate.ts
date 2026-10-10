@@ -19,6 +19,9 @@ export const SESSION_DATE_OUT_OF_RANGE_NOTICE =
 
 export const SESSION_DATE_SAVE_FAILED = "メニューを保存できなかったため、日付を切り替えませんでした";
 
+export const SESSION_DATE_UNSAVEABLE_NOTICE =
+  "前の日付のメニューは保存できないため、保存せずに切り替えました。";
+
 export const SESSION_DATE_NOT_SELECTABLE = "その日付は前日〜翌日の範囲外のため選べません。";
 
 export interface SessionDateChoice {
@@ -111,17 +114,30 @@ export function writeStoredSessionDate(storage: SessionDateStorage, date: string
 
 export type SessionDateSwitch =
   | { switched: true; date: string }
-  | { switched: false; date: string; reason: "unchanged" | "out_of_window" | "save_failed" };
+  | { switched: false; date: string; reason: "unchanged" | "out_of_window" | "save_failed" | "unsaveable" };
+
+/** flush の結果。boolean の false は一時的な失敗（再試行できる）。 */
+export interface FlushResult {
+  ok: boolean;
+  unsaveable: boolean;
+}
+
+async function readFlush(flush: () => Promise<boolean | FlushResult>): Promise<FlushResult> {
+  const value = await flush();
+  if (typeof value === "boolean") return { ok: value, unsaveable: false };
+  return { ok: value.ok, unsaveable: value.ok ? false : value.unsaveable };
+}
 
 /**
  * 日付を変える。窓の外と、いまと同じ日付は何もしない。
- * 未保存の DayPlan が保存できたときだけ persist する。失敗時は今の日付に留まる。
+ * 未保存の DayPlan が保存できたときだけ persist する。
+ * 一時的な失敗は今の日付に留まる。date_window のように保存できないときは unsaveable を返し、呼び出し側が捨てて移る。
  */
 export async function switchSessionDate(input: {
   currentDate: string;
   nextDate: string;
   now: Date;
-  flush: () => Promise<boolean>;
+  flush: () => Promise<boolean | FlushResult>;
   persist: (date: string) => void;
 }): Promise<SessionDateSwitch> {
   if (input.nextDate === input.currentDate) {
@@ -130,10 +146,21 @@ export async function switchSessionDate(input: {
   if (!isWritableSessionDate(input.nextDate, input.now)) {
     return { date: input.currentDate, switched: false, reason: "out_of_window" };
   }
-  const saved = await input.flush();
-  if (!saved) return { date: input.currentDate, switched: false, reason: "save_failed" };
+  const saved = await readFlush(input.flush);
+  if (!saved.ok) {
+    return {
+      date: input.currentDate,
+      switched: false,
+      reason: saved.unsaveable ? "unsaveable" : "save_failed",
+    };
+  }
   input.persist(input.nextDate);
   return { date: input.nextDate, switched: true };
+}
+
+/** 保存できないまま移るとき、選んだ日付がまだ範囲内ならそこへ。外れなら東京の今日。 */
+export function sessionDateAfterUnsaveable(next: string, now: Date): string {
+  return isWritableSessionDate(next, now) ? next : tokyoCivilDate(now);
 }
 
 /** 次の東京 0:00 までのミリ秒。ちょうど 0:00 なら次の日まで。 */
@@ -146,22 +173,47 @@ export function msUntilNextTokyoDate(now: Date): number {
 
 /**
  * 東京の日付が進んで、選んでいた日が窓の外になったときだけ今日へ戻す。
- * 戻す前に未保存の編集を保存する。保存できなければ日付は動かさない。
+ * 戻す前に未保存の編集を保存する。一時的な失敗では日付を動かさない。
+ * date_window のように保存できないときは、捨てて今日へ移し、再試行しない。
  */
 export async function realignSessionDate(input: {
   selected: string;
   now: Date;
-  flush: () => Promise<boolean>;
+  flush: () => Promise<boolean | FlushResult>;
   persist: (date: string) => void;
-}): Promise<{ date: string; notice: string | null; changed: boolean }> {
+}): Promise<{ date: string; notice: string | null; changed: boolean; dropped: boolean }> {
   if (isWritableSessionDate(input.selected, input.now)) {
-    return { date: input.selected, notice: null, changed: false };
+    return { date: input.selected, notice: null, changed: false, dropped: false };
   }
-  const saved = await input.flush();
-  if (!saved) return { date: input.selected, notice: null, changed: false };
+  const saved = await readFlush(input.flush);
+  if (!saved.ok && !saved.unsaveable) {
+    return { date: input.selected, notice: null, changed: false, dropped: false };
+  }
   const today = tokyoCivilDate(input.now);
   input.persist(today);
-  return { date: today, notice: SESSION_DATE_OUT_OF_RANGE_NOTICE, changed: true };
+  if (!saved.ok) {
+    return { date: today, notice: SESSION_DATE_UNSAVEABLE_NOTICE, changed: true, dropped: true };
+  }
+  return { date: today, notice: SESSION_DATE_OUT_OF_RANGE_NOTICE, changed: true, dropped: false };
+}
+
+/** 記録画面の下書きがあるあいだ、自動の日付変更を数で止める。 */
+export function createDateChangeHold() {
+  let count = 0;
+  return {
+    hold() {
+      count += 1;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        count = Math.max(0, count - 1);
+      };
+    },
+    held() {
+      return count > 0;
+    },
+  };
 }
 
 /** DayPlan の応答を、その日付のメニューとして使う。finished は日付ごとに別。 */

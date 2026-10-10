@@ -11,6 +11,8 @@ import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
 import { tokyoCivilDate } from "./domain";
 import {
   SESSION_DATE_SAVE_FAILED,
+  SESSION_DATE_UNSAVEABLE_NOTICE,
+  createDateChangeHold,
   isWritableSessionDate,
   menuFromDayPlan,
   msUntilNextTokyoDate,
@@ -20,9 +22,11 @@ import {
   realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
+  sessionDateAfterUnsaveable,
   storeMenu,
   switchSessionDate,
   writeStoredSessionDate,
+  type FlushResult,
   type SessionDateStorage,
   type SessionMenu,
 } from "./sessionDate";
@@ -89,6 +93,10 @@ interface Session {
   saveError: string | null;
   /** 東京の前日・当日・翌日だけ。切り替える前に、入力途中の DayPlan を flush する。 */
   setDate: (date: string) => Promise<void>;
+  /** 日付の保存待ち。このあいだ日付の選択は押せない。 */
+  dateBusy: boolean;
+  /** 記録画面を開いているあいだ、深夜の自動切替えを止める。戻した関数で解除する。 */
+  holdAutomaticDateChange: () => () => void;
   dismissDateNotice: () => void;
   setMemo: (memo: string) => void;
   addExercise: (name: string) => AddExerciseResult;
@@ -138,6 +146,7 @@ export function SessionProvider({
   const [date, setDateState] = useState(boot.date);
   const [tokyoToday, setTokyoToday] = useState(() => tokyoCivilDate(now()));
   const [dateNotice, setDateNotice] = useState<string | null>(boot.notice);
+  const [dateBusy, setDateBusy] = useState(false);
   const seed = initialMenu(dayPlan != null);
   const [memo, setMemoState] = useState(seed.memo);
   const [exercises, setExercises] = useState<string[]>(seed.exercises);
@@ -161,6 +170,8 @@ export function SessionProvider({
   phaseRef.current = phase;
   const tokyoTodayRef = useRef(tokyoToday);
   tokyoTodayRef.current = tokyoToday;
+  const dateHold = useRef(createDateChangeHold());
+  const holdAutomaticDateChange = useCallback(() => dateHold.current.hold(), []);
 
   const publishTokyoToday = useCallback((at: Date) => {
     const advanced = tokyoTodayAdvance(tokyoTodayRef.current, at);
@@ -226,10 +237,11 @@ export function SessionProvider({
     saver.schedule({ date, memo, exercises, finished });
   }, [phase, saver, date, memo, exercises, finished, menuDate]);
 
-  const flushPending = useCallback(async () => {
+  const flushPending = useCallback(async (): Promise<FlushResult> => {
     const saver = saverRef.current;
-    if (!saver) return true;
-    return saver.flush();
+    if (!saver) return { ok: true, unsaveable: false };
+    const ok = await saver.flush();
+    return { ok, unsaveable: !ok && saver.unsaveable() };
   }, []);
 
   const applySwitchedDate = useCallback(
@@ -256,6 +268,16 @@ export function SessionProvider({
     [dayPlan],
   );
 
+  const dropUnsaveable = useCallback(
+    (previous: string, next: string, at: Date) => {
+      saverRef.current?.dropPending();
+      const target = sessionDateAfterUnsaveable(next, at);
+      writeStoredSessionDate(dateStorage, target);
+      applySwitchedDate(previous, target, SESSION_DATE_UNSAVEABLE_NOTICE);
+    },
+    [applySwitchedDate, dateStorage],
+  );
+
   const setDate = useCallback(
     async (next: string) => {
       if (switching.current) return;
@@ -269,6 +291,7 @@ export function SessionProvider({
       }
       const previous = dateRef.current;
       switching.current = true;
+      setDateBusy(true);
       try {
         const result = await switchSessionDate({
           currentDate: previous,
@@ -278,6 +301,10 @@ export function SessionProvider({
           persist: (value) => writeStoredSessionDate(dateStorage, value),
         });
         if (!result.switched) {
+          if (result.reason === "unsaveable") {
+            dropUnsaveable(previous, next, nowRef.current());
+            return;
+          }
           if (result.reason === "save_failed") {
             setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
           }
@@ -290,9 +317,10 @@ export function SessionProvider({
         applySwitchedDate(previous, result.date, null);
       } finally {
         switching.current = false;
+        setDateBusy(false);
       }
     },
-    [applySwitchedDate, dateStorage, flushPending, publishTokyoToday],
+    [applySwitchedDate, dateStorage, dropUnsaveable, flushPending, publishTokyoToday],
   );
 
   const dismissDateNotice = useCallback(() => setDateNotice(null), []);
@@ -330,6 +358,7 @@ export function SessionProvider({
       if (cancelled || checking) return;
       checking = true;
       let nextDelay = 1000;
+      let realigning = false;
       try {
         if (switching.current || phaseRef.current === "loading") return;
         if (phaseRef.current !== "ready") {
@@ -340,13 +369,21 @@ export function SessionProvider({
         const at = nowRef.current();
         publishTokyoToday(at);
         if (!isWritableSessionDate(previous, at)) {
+          if (dateHold.current.held()) {
+            nextDelay = 1000;
+            return;
+          }
+          realigning = true;
+          switching.current = true;
+          setDateBusy(true);
           const outcome = await realignSessionDate({
             selected: previous,
             now: nowRef.current(),
             flush: flushPending,
             persist: (value) => writeStoredSessionDate(dateStorage, value),
           });
-          if (cancelled || dateRef.current !== previous || switching.current) return;
+          if (cancelled || dateRef.current !== previous) return;
+          if (outcome.dropped) saverRef.current?.dropPending();
           if (!outcome.changed) {
             setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
             nextDelay = 30_000;
@@ -356,6 +393,10 @@ export function SessionProvider({
         }
         nextDelay = Math.max(msUntilNextTokyoDate(nowRef.current()), 1000);
       } finally {
+        if (realigning) {
+          switching.current = false;
+          setDateBusy(false);
+        }
         checking = false;
         if (!cancelled) schedule(nextDelay);
       }
@@ -392,6 +433,8 @@ export function SessionProvider({
       dateNotice,
       dismissDateNotice,
       setDate,
+      dateBusy,
+      holdAutomaticDateChange,
       memo,
       exercises,
       finished,
@@ -432,7 +475,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, dateNotice, dismissDateNotice, exercises, finished, memo, menuDate, saveError, saver, setDate, tokyoToday]);
+  }, [date, dateBusy, dateNotice, dismissDateNotice, exercises, finished, holdAutomaticDateChange, memo, menuDate, saveError, saver, setDate, tokyoToday]);
 
   if (phase === "loading") {
     return (

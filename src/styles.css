@@ -91,6 +91,8 @@ button, input { appearance: none; }
   text-align: left;
 }
 .date-choice.is-selected { border-color: var(--blue); background: #eef4ff; }
+.today-date-btn:disabled,
+.date-choice:disabled { opacity: 0.45; }
 .date-choice-label { font-weight: 700; }
 .date-choice-value { color: var(--muted); }
 .date-notice {

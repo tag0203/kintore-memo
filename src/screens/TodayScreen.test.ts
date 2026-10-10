@@ -122,6 +122,22 @@ describe("SessionDatePicker", () => {
     expect(html).not.toContain(formatJapaneseDate("2026-10-01"));
     expect(html).toContain(SESSION_DATE_NOT_SELECTABLE);
   });
+
+  it("disables the choices while a date switch is saving", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionDatePicker, {
+        date: "2026-10-02",
+        choices,
+        open: true,
+        notice: null,
+        busy: true,
+        onToggle: vi.fn(),
+        onSelect: vi.fn(),
+        onDismissNotice: vi.fn(),
+      }),
+    );
+    expect(html.match(/disabled/g)?.length).toBe(4);
+  });
 });
 
 describe("removalConfirmBody", () => {

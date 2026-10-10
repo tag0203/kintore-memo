@@ -5,6 +5,8 @@ import {
   SESSION_DATE_NOT_SELECTABLE,
   SESSION_DATE_OUT_OF_RANGE_NOTICE,
   SESSION_DATE_STORAGE_KEY,
+  SESSION_DATE_UNSAVEABLE_NOTICE,
+  createDateChangeHold,
   isWritableSessionDate,
   menuFromDayPlan,
   msUntilNextTokyoDate,
@@ -13,6 +15,7 @@ import {
   realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
+  sessionDateAfterUnsaveable,
   sessionDateChoices,
   sessionDateChoicesFromToday,
   storeMenu,
@@ -181,6 +184,19 @@ describe("switchSessionDate", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it("does not persist when the current date can never be saved", async () => {
+    const persist = vi.fn();
+    const result = await switchSessionDate({
+      currentDate: "2026-10-01",
+      nextDate: "2026-10-03",
+      now: justAfterTokyoMidnight,
+      flush: async () => ({ ok: false, unsaveable: true }),
+      persist,
+    });
+    expect(result).toEqual({ date: "2026-10-01", switched: false, reason: "unsaveable" });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("keeps the unsaved DayPlan when the flush fails, so a later save can still write it", async () => {
     const save = vi.fn(async () => {});
     save.mockImplementationOnce(async () => {
@@ -273,7 +289,7 @@ describe("realignSessionDate", () => {
       flush,
       persist,
     });
-    expect(result).toEqual({ date: "2026-10-02", notice: null, changed: false });
+    expect(result).toEqual({ date: "2026-10-02", notice: null, changed: false, dropped: false });
     expect(flush).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
     expect(msUntilNextTokyoDate(new Date("2026-10-02T14:59:00.000Z"))).toBe(60_000);
@@ -299,6 +315,7 @@ describe("realignSessionDate", () => {
       date: "2026-10-03",
       notice: SESSION_DATE_OUT_OF_RANGE_NOTICE,
       changed: true,
+      dropped: false,
     });
     expect(order).toEqual(["flush", "persist:2026-10-03"]);
     expect(readStoredSessionDate(storage)).toBe("2026-10-03");
@@ -312,8 +329,44 @@ describe("realignSessionDate", () => {
       flush: async () => false,
       persist,
     });
-    expect(result).toEqual({ date: "2026-10-01", notice: null, changed: false });
+    expect(result).toEqual({ date: "2026-10-01", notice: null, changed: false, dropped: false });
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("moves to today without retrying when the old date can never be saved", async () => {
+    const persist = vi.fn();
+    const result = await realignSessionDate({
+      selected: "2026-10-01",
+      now: justAfterTokyoMidnight,
+      flush: async () => ({ ok: false, unsaveable: true }),
+      persist,
+    });
+    expect(result).toEqual({
+      date: "2026-10-03",
+      notice: SESSION_DATE_UNSAVEABLE_NOTICE,
+      changed: true,
+      dropped: true,
+    });
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledWith("2026-10-03");
+    expect(sessionDateAfterUnsaveable("2026-10-04", justAfterTokyoMidnight)).toBe("2026-10-04");
+    expect(sessionDateAfterUnsaveable("2026-10-01", justAfterTokyoMidnight)).toBe("2026-10-03");
+  });
+});
+
+describe("automatic date change hold", () => {
+  it("stays held until every draft is released, and a second release is a no-op", () => {
+    const hold = createDateChangeHold();
+    expect(hold.held()).toBe(false);
+    const release = hold.hold();
+    const second = hold.hold();
+    expect(hold.held()).toBe(true);
+    release();
+    expect(hold.held()).toBe(true);
+    release();
+    expect(hold.held()).toBe(true);
+    second();
+    expect(hold.held()).toBe(false);
   });
 });
 

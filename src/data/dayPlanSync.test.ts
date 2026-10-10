@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DayPlanInput } from "./dayPlanClient";
+import { DayPlanRequestError, type DayPlanInput } from "./dayPlanClient";
 import { createDayPlanSaver } from "./dayPlanSync";
 
 function plan(memo: string, extras: Partial<DayPlanInput> = {}): DayPlanInput {
@@ -138,5 +138,21 @@ describe("createDayPlanSaver", () => {
     await expect(saver.flush()).resolves.toBe(false);
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(plan("脚"));
+    expect(saver.unsaveable()).toBe(false);
+  });
+
+  it("treats date_window as unsaveable and dropPending stops another send", async () => {
+    const save = vi.fn(async () => {
+      throw new DayPlanRequestError("その日付のメニューは保存できません", 400, "date_window");
+    });
+    const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚", { date: "2026-10-01" }));
+    await expect(saver.flush()).resolves.toBe(false);
+    expect(saver.unsaveable()).toBe(true);
+    saver.dropPending();
+    expect(saver.unsaveable()).toBe(false);
+    await expect(saver.flush()).resolves.toBe(true);
+    expect(save).toHaveBeenCalledOnce();
   });
 });
