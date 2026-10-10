@@ -12,6 +12,9 @@ import { toISODate } from "./domain";
 
 export type AddExerciseResult = "added" | "present" | "empty" | "too_many" | "invalid" | "too_long";
 
+/** removed: メニューから外した。absent: その名前は無い。finished: 今日を終了済みなので外さない。 */
+export type RemoveExerciseResult = "removed" | "absent" | "finished";
+
 /** `limit` が null のときはモック経路。永続化するときは DayPlan の 40 件で止める。名前の禁止文字はどちらも拒否する。 */
 export function nextExerciseList(
   exercises: readonly string[],
@@ -27,6 +30,35 @@ export function nextExerciseList(
   return { result: "added", exercises: [...exercises, trimmed] };
 }
 
+/**
+ * 今日のメニューから種目を1つ外したあとの配列。
+ * Notion の記録行は触らない。呼び出し側が DayPlan の exercises をまるごと保存する。
+ * 「今日を終了」（finished）のあとは再開するまで外さない。配列も保存も変えない。
+ */
+export function withoutExercise(
+  exercises: readonly string[],
+  name: string,
+  finished: boolean,
+): { result: RemoveExerciseResult; exercises: string[] } {
+  if (finished) return { result: "finished", exercises: [...exercises] };
+  const trimmed = name.trim();
+  if (!trimmed || !exercises.includes(trimmed)) return { result: "absent", exercises: [...exercises] };
+  return { result: "removed", exercises: exercises.filter((item) => item !== trimmed) };
+}
+
+/** removed のときだけ保存するスナップショットを返す。finished と absent は保存しない。 */
+export function removalSnapshot(
+  menu: { memo: string; exercises: readonly string[]; finished: boolean },
+  name: string,
+): { result: RemoveExerciseResult; menu: { memo: string; exercises: string[]; finished: boolean } | null } {
+  const decision = withoutExercise(menu.exercises, name, menu.finished);
+  if (decision.result !== "removed") return { result: decision.result, menu: null };
+  return {
+    result: "removed",
+    menu: { memo: menu.memo, exercises: decision.exercises, finished: menu.finished },
+  };
+}
+
 interface Session {
   date: string;
   memo: string;
@@ -36,6 +68,11 @@ interface Session {
   saveError: string | null;
   setMemo: (memo: string) => void;
   addExercise: (name: string) => AddExerciseResult;
+  /**
+   * 今日のメニューから種目を外し、追加と同じく publish → saver で exercises 全体を保存する。
+   * finished のあいだは外さない（再開するまで）。Notion の記録は削除しない。
+   */
+  removeExercise: (name: string) => RemoveExerciseResult;
   finish: () => void;
   resume: () => void;
 }
@@ -170,6 +207,13 @@ export function SessionProvider({
         if (decision.result !== "added") return decision.result;
         setExercises(decision.exercises);
         publish({ memo, exercises: decision.exercises, finished }, true);
+        return decision.result;
+      },
+      removeExercise: (name) => {
+        const decision = removalSnapshot({ memo, exercises, finished }, name);
+        if (!decision.menu) return decision.result;
+        setExercises(decision.menu.exercises);
+        publish(decision.menu, true);
         return decision.result;
       },
       finish: () => {

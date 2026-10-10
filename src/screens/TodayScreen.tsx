@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
 import { useClient } from "../clientContext";
@@ -13,11 +13,83 @@ interface PlanRow {
   today: ExerciseLog[];
 }
 
+/** 記録がある種目を外すときの確認文。Notion の行は残ることを明示する。 */
+export function removalConfirmBody(todayCount: number): string {
+  return `今日の記録は${todayCount}件あります。メニューから外しても、Notion に保存した記録は削除されません。`;
+}
+
+export function TodayExerciseRow({
+  index,
+  name,
+  previous,
+  today,
+  removable,
+  onOpen,
+  onRemove,
+}: {
+  index: number;
+  name: string;
+  previous: ExerciseLog[];
+  today: ExerciseLog[];
+  /** 編集中かつ未終了のときだけ。カードの外に置き、タップ領域を分ける。 */
+  removable: boolean;
+  onOpen: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <li className="plan-item">
+      <button type="button" className="exercise-card" onClick={onOpen}>
+        <span className="exercise-copy">
+          <span className="exercise-name">
+            {index + 1}) {name}
+          </span>
+          {previous.length === 0 ? (
+            <span className="exercise-prev">前回 記録なし</span>
+          ) : (
+            <span className="exercise-prev">
+              <span className="log-kicker">前回 {formatMonthDay(previous[0].date)}</span>
+              {previous.map((log) => (
+                <span key={log.id} className="log-line">
+                  {formatLogLine(log)}
+                </span>
+              ))}
+            </span>
+          )}
+          {today.length > 0 && (
+            <span className="exercise-today">
+              <span className="log-kicker">今日</span>
+              {today.map((log) => (
+                <span key={log.id} className="log-line">
+                  {formatLogLine(log)}
+                </span>
+              ))}
+            </span>
+          )}
+        </span>
+        <span className={today.length > 0 ? "badge is-done" : "badge"}>
+          {today.length > 0 ? `${today.length}件` : "未"}
+        </span>
+      </button>
+      {removable && (
+        <button type="button" className="plan-remove" aria-label={`${name}を今日のメニューから外す`} onClick={onRemove}>
+          外す
+        </button>
+      )}
+    </li>
+  );
+}
+
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
   const session = useSession();
   const client = useClient();
   const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
+  useEffect(() => {
+    if (session.finished || session.exercises.length === 0) setEditing(false);
+  }, [session.finished, session.exercises.length]);
   const planKey = session.exercises.join("\n");
   const loaded = useLoad(async () => {
     const rows: PlanRow[] = await Promise.all(
@@ -33,6 +105,17 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   }, [planKey, session.date, client]);
 
   const recordedCount = loaded.data?.filter((row) => row.today.length > 0).length ?? 0;
+  const canEditMenu = !session.finished && session.exercises.length > 0;
+  const pendingTodayCount = loaded.data?.find((row) => row.name === pendingRemove)?.today.length ?? 0;
+
+  function askRemove(name: string, todayCount: number) {
+    if (session.finished) return;
+    if (todayCount > 0) {
+      setPendingRemove(name);
+      return;
+    }
+    session.removeExercise(name);
+  }
 
   return (
     <section className="screen">
@@ -88,53 +171,39 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       )}
 
       {loaded.data && session.exercises.length > 0 && (
-        <ul className="plan">
-          {session.exercises.map((name, index) => {
-            const row = loaded.data?.find((item) => item.name === name);
-            const previous = row?.previous ?? [];
-            const today = row?.today ?? [];
-            return (
-              <li key={name}>
-                <button
-                  type="button"
-                  className="exercise-card"
-                  onClick={() => navigate({ screen: "record", exercise: name })}
-                >
-                  <span className="exercise-copy">
-                    <span className="exercise-name">
-                      {index + 1}) {name}
-                    </span>
-                    {previous.length === 0 ? (
-                      <span className="exercise-prev">前回 記録なし</span>
-                    ) : (
-                      <span className="exercise-prev">
-                        <span className="log-kicker">前回 {formatMonthDay(previous[0].date)}</span>
-                        {previous.map((log) => (
-                          <span key={log.id} className="log-line">
-                            {formatLogLine(log)}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                    {today.length > 0 && (
-                      <span className="exercise-today">
-                        <span className="log-kicker">今日</span>
-                        {today.map((log) => (
-                          <span key={log.id} className="log-line">
-                            {formatLogLine(log)}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                  </span>
-                  <span className={today.length > 0 ? "badge is-done" : "badge"}>
-                    {today.length > 0 ? `${today.length}件` : "未"}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          {canEditMenu && (
+            <div className="plan-edit-row">
+              <button
+                type="button"
+                className="plan-edit"
+                aria-pressed={editing}
+                onClick={() => setEditing((value) => !value)}
+              >
+                {editing ? "完了" : "編集"}
+              </button>
+            </div>
+          )}
+          <ul className="plan">
+            {session.exercises.map((name, index) => {
+              const row = loaded.data?.find((item) => item.name === name);
+              const previous = row?.previous ?? [];
+              const today = row?.today ?? [];
+              return (
+                <TodayExerciseRow
+                  key={name}
+                  index={index}
+                  name={name}
+                  previous={previous}
+                  today={today}
+                  removable={editing && canEditMenu}
+                  onOpen={() => navigate({ screen: "record", exercise: name })}
+                  onRemove={() => askRemove(name, today.length)}
+                />
+              );
+            })}
+          </ul>
+        </>
       )}
 
       {session.finished ? (
@@ -163,8 +232,24 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           confirmLabel="終了する"
           onCancel={() => setConfirmEnd(false)}
           onConfirm={() => {
+            setEditing(false);
             session.finish();
             setConfirmEnd(false);
+          }}
+        />
+      )}
+
+      {pendingRemove && (
+        <Modal
+          titleId="remove-title"
+          title={`「${pendingRemove}」を外しますか？`}
+          body={removalConfirmBody(pendingTodayCount)}
+          cancelLabel="キャンセル"
+          confirmLabel="外す"
+          onCancel={() => setPendingRemove(null)}
+          onConfirm={() => {
+            session.removeExercise(pendingRemove);
+            setPendingRemove(null);
           }}
         />
       )}
