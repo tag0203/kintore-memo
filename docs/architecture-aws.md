@@ -90,7 +90,7 @@ flowchart TB
 | CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
-| GitHub Actions + OIDC | CI は毎回。デプロイは OIDC の手動実行。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
+| GitHub Actions + OIDC | CI は毎回。`main` の CI 成功後に `dev` へ自動デプロイし、`staging` / `prod` は手動。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
@@ -111,7 +111,7 @@ docs/aws-deploy.md
 docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
 docs/github-actions-oidc.md
-.github/workflows/      CI と、手動の OIDC デプロイ（#14）。Go のテストと sam build を含む
+.github/workflows/      CI と OIDC デプロイ（#14。main の CI 成功後に dev）。Go のテストと sam build を含む
 ```
 
 ## Notion と DynamoDB

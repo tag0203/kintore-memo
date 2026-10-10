@@ -1,6 +1,6 @@
 # GitHub Actions（CI と OIDC デプロイ）
 
-Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のスライスです。CI は pull request と `main` で毎回動きます。AWS へのデプロイは手動で、OIDC ロールが無い間は成功したまま何もしません。
+Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のスライスです。CI は pull request と `main` で毎回動きます。`main` への push で CI が成功すると `dev` へ自動デプロイします。`staging` と `prod`、それに任意の再実行は手動です。OIDC ロールが無い間は、自動も手動も成功したまま何もしません。
 
 長期のアクセスキー（`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`）は使いません。リポジトリの Secrets にも置きません。
 
@@ -9,9 +9,38 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 | ファイル | いつ動くか | 内容 |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
-| `.github/workflows/deploy.yml` | Actions タブからの手動実行だけ | 下の変数が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化 |
+| `.github/workflows/deploy.yml` | `main` への push で CI が成功したあと（自動は `dev` だけ）。Actions タブからの手動実行（`dev` / `staging` / `prod`） | 下の変数が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
+
+## main から dev への自動デプロイ
+
+`deploy.yml` は CI（`.github/workflows/ci.yml` の `name: CI`）が完了した `workflow_run` でも動きます。条件は次のとおりです。
+
+- 対象ブランチは `main`
+- 起動元イベントは `push`（pull request や CI の手動実行ではデプロイしない）
+- `github.event.workflow_run.conclusion == 'success'`
+- 起動元の path はこのリポジトリの `.github/workflows/ci.yml`
+- デプロイ先は `dev` 固定。`staging` / `prod` は手動の `workflow_dispatch` だけ
+
+`test` workflow（`test.yml`）は待ちません。中身は `npm test`、`go test`、Lambda バイナリのコンパイルで、CI の app ジョブがそれに加えて型チェック、ビルド、`check:secrets`、SAM の validate / build を実行します。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、両方を書くと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
+
+checkout するコミットは `github.event.workflow_run.head_sha` です。`workflow_run` の `github.sha` はデフォルトブランチの先端であり、テストしたコミットとは限りません。
+
+同じ環境へのデプロイは concurrency group `deploy-<environment>` で重ねません。進行中のデプロイはキャンセルしません。自動実行は手動の `dev` と同じ `deploy-dev` に入ります。`staging` と `prod` の手動実行は別グループのままです。
+
+`workflow_run` には `paths` フィルタがありません。gate が、テストした SHA と、そのあと `main` の first-parent に乗った各コミットの変更ファイルを見ます。
+
+- 変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけなら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
+- テストしたコミットより新しいコミットがアプリケーションファイルを変えているときは、古い SHA をデプロイしません。遅い CI が新しい `dev` を巻き戻さないためです。新しい方の CI が成功したときに、その SHA をデプロイします
+- 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします
+- 判定できない SHA（`main` の first-parent に無い、など）はデプロイしません。手動の `workflow_dispatch` はこの判定をしません
+
+### 自動デプロイを一時的に止める
+
+リポジトリ変数 `AUTO_DEPLOY_DEV` を `false` にします。Settings → Secrets and variables → Actions → Variables です。未設定または `true` のときは自動デプロイします。それ以外の値は打ち間違いとみなし、gate が失敗します。
+
+この変数は自動実行だけを止めます。Actions タブからの手動 Deploy は今までどおりです。workflow 全体を無効にすると手動実行も止まるので、一時停止には使いません。再開するときは変数を `true` にするか、削除します。
 
 本番 API は Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。CI は `go test` と、そのバイナリを対象にした `sam build` を実行します。Cloudflare DNS（[#13](https://github.com/tag0203/kintore-memo/issues/13)）はこのワークフローの対象外です。
 
@@ -19,7 +48,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 
 | ジョブ | AWS / `id-token` | 内容 |
 | --- | --- | --- |
-| `gate` | なし | 変数と `refs/heads/main` を確認。未設定なら以降を skip |
+| `gate` | なし | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV` と、テスト済み SHA がアプリケーション変更かどうかも見る |
 | `build` | なし | `sam build`。成果物を artifact へ |
 | `deploy-stack` | OIDC | 検証済み SAM 成果物を `sam deploy`。公開スタック出力だけを artifact へ |
 | `build-spa` | なし | `npm ci` / `npm run build` / `check:secrets`（公開 Cognito・API URL のみ） |
@@ -104,6 +133,10 @@ Deploy
 
 名前だけの古い形式（`repo:tag0203/kintore-memo:ref:refs/heads/main`）では引き受けられません。
 
+自動デプロイの `workflow_run` でも、この信頼のままで引き受けられます。このイベントはデフォルトブランチ（`main`）で動き、OIDC トークンを要求するのは引き続き `name: Deploy` の workflow です。そのため `sub` は上の `ref:refs/heads/main`、`workflow` は `Deploy` のままです。`event_name` は `workflow_run` になりますが、信頼条件は `event_name` を見ていません。reusable workflow ではないので `job_workflow_ref` は `deploy.yml@refs/heads/main` であり、条件には使っていません。
+
+CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。その場合 AWS が見る `workflow` は呼び出し元の `CI` になり、信頼の更新と、CI という名前の workflow からの引き受けが必要になります。`infra/github-oidc.yaml` は変えていないので、この変更のために OIDC スタックを再適用する必要はありません。
+
 ## 権限の範囲
 
 ポリシーの実体は `infra/github-oidc.yaml` です。概要だけここに書きます。
@@ -141,7 +174,9 @@ Deploy
 
 ## デプロイの実行
 
-変数を保存したあと、Actions の **Deploy** を `main` で手動実行します。入力は `dev` / `staging` / `prod`（既定 `dev`）です。
+`AWS_DEPLOY_ROLE_ARN` を保存したあと、`main` への push で CI が成功すると `dev` は自動でデプロイされます。ロール変数が空の間は、その実行も成功のまま何もしません。
+
+`staging` / `prod`、または `dev` の再実行は、Actions の **Deploy** を `main` で手動実行します。入力は `dev` / `staging` / `prod`（既定 `dev`）です。手動実行は `AUTO_DEPLOY_DEV` の影響を受けません。
 
 行うことは次のとおりです。
 

@@ -1,4 +1,4 @@
-# Manual OIDC deploy. No long-lived AWS access keys.
+# OIDC deploy. No long-lived AWS access keys.
 # No-op (success) when the repository variable AWS_DEPLOY_ROLE_ARN is unset.
 # Do not add AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY.
 # Do not use `set -x`, `sam deploy --debug`, or `aws --debug` — they can print credentials.
@@ -6,6 +6,12 @@
 #
 # Build (sam build / npm ci / npm run build) runs in jobs without AWS credentials or
 # id-token: write. Only deploy-stack and publish-spa assume the OIDC role.
+#
+# Automatic deploy: after the CI workflow succeeds for a push to main, publish dev
+# from that workflow's head SHA. Manual workflow_dispatch is unchanged (dev/staging/prod).
+# workflow_run cannot filter paths; the gate skips docs/markdown-only pushes.
+# Pause automatic deploy with repository variable AUTO_DEPLOY_DEV=false.
+# That does not disable workflow_dispatch.
 
 name: Deploy
 
@@ -21,48 +27,160 @@ on:
           - dev
           - staging
           - prod
+  workflow_run:
+    # CI already runs the test workflow's checks plus typecheck, build, secrets, and SAM.
+    # workflow_run fires when any listed workflow completes, so listing "test" as well
+    # would deploy after only the subset succeeded.
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 # Job-level permissions only. Build jobs must not receive id-token: write.
 permissions: {}
 
+# Manual staging/prod keep their own groups. Automatic runs share deploy-dev
+# with a manual dev deploy. In-progress deploys are not cancelled.
 concurrency:
-  group: deploy-${{ inputs.environment }}
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'dev' }}
   cancel-in-progress: false
 
 jobs:
   gate:
     name: Check deploy role configuration
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    # workflow_dispatch evaluates the first clause and does not need workflow_run fields.
+    # Automatic deploy requires the CI workflow on this repo, from a push to main.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
     permissions:
       contents: read
     outputs:
       configured: ${{ steps.gate.outputs.configured }}
+      environment: ${{ steps.gate.outputs.environment }}
+      sha: ${{ steps.gate.outputs.sha }}
     steps:
+      - name: Checkout main to inspect the tested commit
+        if: github.event_name == 'workflow_run'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          # github.sha is the default-branch commit this workflow file came from.
+          # A later fetch updates origin/main without swapping the planner script.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Skip until the OIDC role exists
         id: gate
         env:
           AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AUTO_DEPLOY_DEV: ${{ vars.AUTO_DEPLOY_DEV }}
+          INPUT_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || '' }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          TRIGGER_PATH: ${{ github.event.workflow_run.path }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ -z "${AWS_DEPLOY_ROLE_ARN}" ]; then
+          skip() {
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "AWS_DEPLOY_ROLE_ARN is unset. Deploy is a no-op until the OIDC role exists."
-            echo "See docs/github-actions-oidc.md."
+            echo "environment=" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            echo "$1"
             exit 0
+          }
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            if [ "${TRIGGER_CONCLUSION}" != "success" ] || [ "${TRIGGER_EVENT}" != "push" ] || [ "${HEAD_BRANCH}" != "main" ] || [ "${TRIGGER_PATH}" != ".github/workflows/ci.yml" ] || [ "${HEAD_REPOSITORY}" != "${GITHUB_REPOSITORY}" ]; then
+              echo "Refusing automatic deploy: triggering workflow is not a successful push of CI on main in this repository."
+              exit 1
+            fi
+            case "${AUTO_DEPLOY_DEV:-}" in
+              ""|true|TRUE|True) ;;
+              false|FALSE|False)
+                skip "AUTO_DEPLOY_DEV is false. Automatic dev deploy is paused. workflow_dispatch still works."
+                ;;
+              *)
+                echo "AUTO_DEPLOY_DEV must be empty, true, or false."
+                exit 1
+                ;;
+            esac
+            if ! [[ "${HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Refusing automatic deploy: workflow_run head_sha is not a commit SHA."
+              exit 1
+            fi
+          elif [ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]; then
+            echo "Refusing deploy: unsupported event."
+            exit 1
+          fi
+
+          if [ -z "${AWS_DEPLOY_ROLE_ARN}" ]; then
+            skip "AWS_DEPLOY_ROLE_ARN is unset. Deploy is a no-op until the OIDC role exists. See docs/github-actions-oidc.md."
           fi
           if ! [[ "${AWS_DEPLOY_ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]]; then
             echo "AWS_DEPLOY_ROLE_ARN is set but is not an IAM role ARN. Not assuming it."
             exit 1
           fi
+          # workflow_run's GITHUB_REF is the default branch. The trust policy's sub
+          # uses that ref, so it must stay refs/heads/main. The deployed tree is HEAD_SHA.
           if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
             echo "This workflow only assumes the deploy role from refs/heads/main."
             exit 1
           fi
           # Mask after the shape check so the ARN is not printed by later steps.
           echo "::add-mask::${AWS_DEPLOY_ROLE_ARN}"
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            ENVIRONMENT="${INPUT_ENVIRONMENT}"
+            SHA="${GITHUB_SHA}"
+          else
+            ENVIRONMENT="dev"
+            # See commits that landed after this workflow_run was queued.
+            # The token is masked; do not enable xtrace around this fetch.
+            # '+' accepts a force-push. The plan then refuses a SHA that is no longer on main.
+            git -c "http.extraheader=AUTHORIZATION: bearer ${GITHUB_TOKEN}" \
+              fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            PLAN_JSON="$(node scripts/auto-deploy-plan.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main)" \
+              || { echo "Could not plan the automatic deploy."; exit 1; }
+            echo "Auto-deploy plan: ${PLAN_JSON}"
+            DEPLOY="$(node -e 'const plan=JSON.parse(process.argv[1]); if(plan.deploy!==true&&plan.deploy!==false) process.exit(2); if(plan.deploy&&!/^[0-9a-f]{40}$/.test(plan.sha)) process.exit(2); process.stdout.write(plan.deploy?"true":"false")' "${PLAN_JSON}")" \
+              || { echo "Could not read the auto-deploy plan."; exit 1; }
+            if [ "${DEPLOY}" != "true" ]; then
+              skip "Automatic dev deploy skipped. ${PLAN_JSON}"
+            fi
+            SHA="$(node -e 'const plan=JSON.parse(process.argv[1]); if(!/^[0-9a-f]{40}$/.test(plan.sha)) process.exit(2); process.stdout.write(plan.sha)' "${PLAN_JSON}")" \
+              || { echo "Could not read the deploy SHA."; exit 1; }
+          fi
+
+          case "${ENVIRONMENT}" in
+            dev|staging|prod) ;;
+            *)
+              echo "Unsupported environment."
+              exit 1
+              ;;
+          esac
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
+            echo "Automatic deploy is limited to dev."
+            exit 1
+          fi
+          if ! [[ "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Refusing to deploy: commit SHA is not 40 lowercase hex characters."
+            exit 1
+          fi
           echo "configured=true" >> "$GITHUB_OUTPUT"
-          echo "OIDC deploy role is configured. The role ARN is masked."
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "OIDC deploy role is configured. The role ARN is masked. Environment: ${ENVIRONMENT}."
 
   build:
     name: sam build (no AWS credentials)
@@ -88,6 +206,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Go
@@ -167,6 +286,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           persist-credentials: false
 
       - name: Download SAM build artifact
@@ -204,9 +324,13 @@ jobs:
       - name: sam deploy
         working-directory: infra
         env:
-          ENVIRONMENT: ${{ inputs.environment }}
+          ENVIRONMENT: ${{ needs.gate.outputs.environment }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
+            echo "Automatic deploy is limited to dev."
+            exit 1
+          fi
           case "${ENVIRONMENT}" in
             dev|staging|prod) ;;
             *)
@@ -227,9 +351,13 @@ jobs:
 
       - name: Export public stack outputs for SPA build
         env:
-          ENVIRONMENT: ${{ inputs.environment }}
+          ENVIRONMENT: ${{ needs.gate.outputs.environment }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
+            echo "Automatic deploy is limited to dev."
+            exit 1
+          fi
           case "${ENVIRONMENT}" in
             dev|staging|prod) ;;
             *)
@@ -311,6 +439,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          ref: ${{ needs.gate.outputs.sha }}
           persist-credentials: false
 
       - name: Setup Node.js
@@ -336,6 +465,10 @@ jobs:
           # shellcheck disable=SC1091
           source /tmp/spa-publish/env.txt
           set +a
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
+            echo "Automatic deploy is limited to dev."
+            exit 1
+          fi
           case "${ENVIRONMENT}" in
             dev|staging|prod) ;;
             *)
@@ -426,6 +559,10 @@ jobs:
           # shellcheck disable=SC1091
           source /tmp/spa-publish/env.txt
           set +a
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
+            echo "Automatic deploy is limited to dev."
+            exit 1
+          fi
           case "${ENVIRONMENT}" in
             dev|staging|prod) ;;
             *)

@@ -1,4 +1,5 @@
 # Go and npm tests. CI and OIDC deploy live in ci.yml and deploy.yml.
+# Automatic dev deploy waits on CI, which already runs these checks.
 # Action versions are pinned to full commit SHAs (mutable tags are not trusted).
 name: test
 
