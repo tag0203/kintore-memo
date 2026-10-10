@@ -87,7 +87,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | GET | `/api/day-plan?date=YYYY-MM-DD` | そのユーザーのその日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
 | PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。ログイン済みの画面が呼ぶ |
 
-入力チェック（400）の `error` は、これまでどおり具体的な文言です。Notion・SSM・通信障害などそれ以外は、固定の文言（`Notion との通信に失敗しました` または `サーバーでエラーが発生しました`）と相関用の `requestId` だけを返します。上流（Notion / AWS / ネットワーク）は 502、設定不足やその他の障害は 500 です。ARN、アカウント ID、Notion の ID、URL、トークンは応答に入れません。調査用の詳細は伏せ字にして CloudWatch に残します。画面は 5xx の生テキストを出さず、この固定文言と `requestId` を表示します。
+入力チェック（400）の `error` は、これまでどおり具体的な文言です。Notion・SSM・通信障害などそれ以外は、固定の文言（`Notion との通信に失敗しました` または `サーバーでエラーが発生しました`）と、API Gateway の `requestId`（base64）だけを返します。UUID は Notion の ID と区別できないので応答にも画面にも出しません。Lambda のリクエスト ID は CloudWatch のログに残します。上流（Notion / AWS / ネットワーク）は 502、設定不足やその他の障害は 500 です。ARN、アカウント ID、Notion の ID、URL、トークンは応答に入れません。調査用の詳細は伏せ字にして CloudWatch に残します。画面は 5xx の生テキストを出さず、この固定文言と安全な `requestId` を表示します。
 
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 

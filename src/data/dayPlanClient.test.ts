@@ -137,6 +137,7 @@ describe("createHttpDayPlanClient", () => {
       "ntn_" + "secretvalue",
       "secret_" + "ABC123456",
       "a1b2c3d4e5f64789a123ef1234567890",
+      "a1b2c3d4-e5f6-4789-a123-ef1234567890",
     ]) {
       vi.stubGlobal(
         "fetch",

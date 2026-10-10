@@ -30,7 +30,11 @@ var (
 	arnPattern      = regexp.MustCompile(`arn:aws[a-zA-Z0-9-]*:[^\s"'<>]+`)
 	uuidPattern     = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	notionIDPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{32}\b`)
-	accountPattern  = regexp.MustCompile(`\b\d{12}\b`)
+	accountPattern  = regexp.MustCompile(`\d{12}`)
+	lambdaUUID      = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	compactNotionID = regexp.MustCompile(`(?i)^[0-9a-f]{32}$`)
+	apigwRequestID  = regexp.MustCompile(`^[A-Za-z0-9+/]{8,128}={0,2}$`)
+	letterPattern   = regexp.MustCompile(`[A-Za-z]`)
 )
 
 // notionError is the JSON body for workout routes.
@@ -107,25 +111,47 @@ func faultBody(message, requestID string) map[string]string {
 
 // logServerError records the error type, the fixed client message, and a redacted
 // detail string. It does not log headers or the request body.
+// The Lambda request ID stays in the log. The returned ID is the only value safe
+// to show: an API Gateway token, never a UUID that could be a Notion ID.
 func logServerError(ctx context.Context, event events.APIGatewayV2HTTPRequest, prefix string, err error, public string) string {
-	id := requestID(ctx, event)
+	publicID := publicRequestID(event)
 	detail := ""
 	if err != nil {
 		detail = redact(err.Error())
 	}
-	log.Printf("%s requestId=%s %T: %s detail=%s", prefix, id, err, public, detail)
+	log.Printf("%s lambdaRequestId=%s requestId=%s %T: %s detail=%s", prefix, lambdaRequestID(ctx), publicID, err, public, detail)
+	return publicID
+}
+
+func lambdaRequestID(ctx context.Context) string {
+	if lc, ok := lambdacontext.FromContext(ctx); ok {
+		return strings.TrimSpace(lc.AwsRequestID)
+	}
+	return ""
+}
+
+// publicRequestID is the API Gateway request ID when it cannot be a Notion ID,
+// an ARN, an account ID, or a token. Lambda IDs are UUIDs, so they stay in the log.
+func publicRequestID(event events.APIGatewayV2HTTPRequest) string {
+	id := strings.TrimSpace(event.RequestContext.RequestID)
+	if !safePublicRequestID(id) {
+		return ""
+	}
 	return id
 }
 
-// requestID prefers the Lambda request ID so the client value matches CloudWatch.
-// API Gateway's request ID is the fallback.
-func requestID(ctx context.Context, event events.APIGatewayV2HTTPRequest) string {
-	if lc, ok := lambdacontext.FromContext(ctx); ok {
-		if id := strings.TrimSpace(lc.AwsRequestID); id != "" {
-			return id
-		}
+func safePublicRequestID(id string) bool {
+	if id == "" || lambdaUUID.MatchString(id) || compactNotionID.MatchString(id) {
+		return false
 	}
-	return strings.TrimSpace(event.RequestContext.RequestID)
+	lower := strings.ToLower(id)
+	if strings.Contains(lower, "ntn_") || strings.Contains(lower, "secret_") {
+		return false
+	}
+	if !apigwRequestID.MatchString(id) || accountPattern.MatchString(id) || !letterPattern.MatchString(id) {
+		return false
+	}
+	return true
 }
 
 // redact hides tokens, ARNs, account IDs, Notion IDs, and URLs before logging.

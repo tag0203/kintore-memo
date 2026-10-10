@@ -322,6 +322,8 @@ describe("http workout client", () => {
       "ntn_" + "secretvalue",
       "secret_" + "ABC123456",
       "a1b2c3d4e5f64789a123ef1234567890",
+      "a1b2c3d4-e5f6-4789-a123-ef1234567890",
+      "11111111-2222-4333-8444-555555555555",
     ]) {
       vi.stubGlobal(
         "fetch",
@@ -348,7 +350,7 @@ describe("http workout client", () => {
       "fetch",
       vi.fn(async () =>
         Response.json(
-          { error: "サーバーでエラーが発生しました", requestId: "11111111-2222-4333-8444-555555555555" },
+          { error: "サーバーでエラーが発生しました", requestId: "ZoG1fH0oIAMEjeg=" },
           { status: 500 },
         ),
       ),
@@ -356,7 +358,7 @@ describe("http workout client", () => {
     try {
       const workout = client();
       await expect(workout.listExercises()).rejects.toThrow(
-        "サーバーでエラーが発生しました（11111111-2222-4333-8444-555555555555）",
+        "サーバーでエラーが発生しました（ZoG1fH0oIAMEjeg=）",
       );
     } finally {
       vi.unstubAllGlobals();

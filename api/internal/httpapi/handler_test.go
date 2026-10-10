@@ -278,17 +278,20 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 			},
 		})
 		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
-		event.RequestContext.RequestID = "gw-req-ssm"
+		event.RequestContext.RequestID = "ZoG1fH0oIAMEjeg="
 		event.Headers = map[string]string{"authorization": "Bearer " + token}
-		ctx := lambdacontext.NewContext(context.Background(), &lambdacontext.LambdaContext{AwsRequestID: "lambda-req-ssm"})
+		ctx := lambdacontext.NewContext(context.Background(), &lambdacontext.LambdaContext{AwsRequestID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
 		res, err := h.Handle(ctx, event)
 		if err != nil || res.StatusCode != 502 {
 			t.Fatalf("ssm %d %v %s", res.StatusCode, err, res.Body)
 		}
-		if strings.Contains(res.Body, "gw-req-ssm") {
-			t.Fatalf("gateway id replaced the lambda id: %s", res.Body)
+		if strings.Contains(res.Body, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda uuid was returned: %s", res.Body)
 		}
-		assertSafe(t, res.StatusCode, res.Body, msgServer, "lambda-req-ssm", "*smithy.OperationError")
+		if !strings.Contains(logs.String(), "lambdaRequestId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda id missing from log: %s", logs.String())
+		}
+		assertSafe(t, res.StatusCode, res.Body, msgServer, "ZoG1fH0oIAMEjeg=", "*smithy.OperationError")
 	})
 
 	t.Run("notion 404", func(t *testing.T) {
@@ -299,12 +302,12 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 		)
 		h := testHandler(&fakeBackend{fail: errString(message)}, nil, nil)
 		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
-		event.RequestContext.RequestID = "gw-req-notion"
+		event.RequestContext.RequestID = "K1x7Ejy1iYcEJew="
 		res, err := h.Handle(context.Background(), event)
 		if err != nil || res.StatusCode != 502 {
 			t.Fatalf("notion %d %v %s", res.StatusCode, err, res.Body)
 		}
-		assertSafe(t, res.StatusCode, res.Body, msgNotion, "gw-req-notion", "httpapi.errString")
+		assertSafe(t, res.StatusCode, res.Body, msgNotion, "K1x7Ejy1iYcEJew=", "httpapi.errString")
 	})
 
 	t.Run("network url", func(t *testing.T) {
@@ -320,25 +323,43 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 			marker,
 		)
 		event := httpEvent("POST", "/api/logs", "$default", "", body, false)
-		event.RequestContext.RequestID = "gw-req-url"
+		event.RequestContext.RequestID = "VJ6r1Gq1iYcEJ9A="
 		event.Headers = map[string]string{"authorization": "Bearer " + token}
 		res, err := h.Handle(context.Background(), event)
 		if err != nil || res.StatusCode != 502 {
 			t.Fatalf("url %d %v %s", res.StatusCode, err, res.Body)
 		}
-		assertSafe(t, res.StatusCode, res.Body, msgNotion, "gw-req-url", "*url.Error")
+		assertSafe(t, res.StatusCode, res.Body, msgNotion, "VJ6r1Gq1iYcEJ9A=", "*url.Error")
 	})
 
 	t.Run("unknown", func(t *testing.T) {
 		logs.Reset()
 		h := testHandler(&fakeBackend{fail: errString("unexpected failure token " + token + " " + pageURL)}, nil, nil)
 		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
-		event.RequestContext.RequestID = "gw-req-unknown"
+		event.RequestContext.RequestID = "JMJ4sH2oIAMEjeg="
 		res, err := h.Handle(context.Background(), event)
 		if err != nil || res.StatusCode != 500 {
 			t.Fatalf("unknown %d %v %s", res.StatusCode, err, res.Body)
 		}
-		assertSafe(t, res.StatusCode, res.Body, msgServer, "gw-req-unknown", "httpapi.errString")
+		assertSafe(t, res.StatusCode, res.Body, msgServer, "JMJ4sH2oIAMEjeg=", "httpapi.errString")
+	})
+
+	t.Run("uuid request id omitted", func(t *testing.T) {
+		logs.Reset()
+		h := testHandler(&fakeBackend{fail: errString("Notion API: upstream failed")}, nil, nil)
+		event := httpEvent("GET", "/api/exercises", "$default", "", "", false)
+		event.RequestContext.RequestID = notionID
+		ctx := lambdacontext.NewContext(context.Background(), &lambdacontext.LambdaContext{AwsRequestID: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"})
+		res, err := h.Handle(ctx, event)
+		if err != nil || res.StatusCode != 502 {
+			t.Fatalf("uuid id %d %v %s", res.StatusCode, err, res.Body)
+		}
+		if strings.Contains(res.Body, "requestId") || strings.Contains(res.Body, notionID) {
+			t.Fatalf("uuid request id leaked: %s", res.Body)
+		}
+		if !strings.Contains(logs.String(), "lambdaRequestId=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee") {
+			t.Fatalf("lambda id missing from log: %s", logs.String())
+		}
 	})
 }
 
