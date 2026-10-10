@@ -54,6 +54,25 @@ describe("TodayExerciseRow", () => {
     );
     expect(html).not.toContain("外す");
     expect(html).toContain("2件");
+    expect(html).toContain("今日");
+  });
+
+  it("labels logs and removal with the selected date when it is not today", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayExerciseRow, {
+        index: 0,
+        name: "スクワット",
+        previous: [],
+        today: [log("a")],
+        removable: true,
+        dateLabel: "10/10（前日）",
+        onOpen: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    );
+    expect(html).toContain("10/10（前日）");
+    expect(html).toContain("スクワットを10/10（前日）のメニューから外す");
+    expect(html).not.toContain(">今日<");
   });
 });
 
@@ -148,5 +167,10 @@ describe("removalConfirmBody", () => {
     expect(body).toContain("2件");
     expect(body).toContain("Notion");
     expect(body).toContain("削除されません");
+    expect(body).toContain("今日の記録は2件あります");
+  });
+
+  it("names the selected date when it is not today", () => {
+    expect(removalConfirmBody(1, "10/12（翌日）")).toContain("10/12（翌日）の記録は1件あります");
   });
 });

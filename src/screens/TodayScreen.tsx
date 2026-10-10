@@ -7,7 +7,7 @@ import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } f
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
-import { sessionDateChoices, type SessionDateChoice } from "../sessionDate";
+import { sessionDateChoices, sessionDateLabel, type SessionDateChoice } from "../sessionDate";
 
 interface PlanRow {
   name: string;
@@ -16,8 +16,8 @@ interface PlanRow {
 }
 
 /** 記録がある種目を外すときの確認文。Notion の行は残ることを明示する。 */
-export function removalConfirmBody(todayCount: number): string {
-  return `今日の記録は${todayCount}件あります。メニューから外しても、Notion に保存した記録は削除されません。`;
+export function removalConfirmBody(todayCount: number, dateLabel = "今日"): string {
+  return `${dateLabel}の記録は${todayCount}件あります。メニューから外しても、Notion に保存した記録は削除されません。`;
 }
 
 export function TodayExerciseRow({
@@ -26,6 +26,7 @@ export function TodayExerciseRow({
   previous,
   today,
   removable,
+  dateLabel = "今日",
   onOpen,
   onRemove,
 }: {
@@ -35,6 +36,8 @@ export function TodayExerciseRow({
   today: ExerciseLog[];
   /** 編集中かつ未終了のときだけ。カードの外に置き、タップ領域を分ける。 */
   removable: boolean;
+  /** 東京の今日なら「今日」。それ以外は「10/10（前日）」。 */
+  dateLabel?: string;
   onOpen: () => void;
   onRemove: () => void;
 }) {
@@ -59,7 +62,7 @@ export function TodayExerciseRow({
           )}
           {today.length > 0 && (
             <span className="exercise-today">
-              <span className="log-kicker">今日</span>
+              <span className="log-kicker">{dateLabel}</span>
               {today.map((log) => (
                 <span key={log.id} className="log-line">
                   {formatLogLine(log)}
@@ -73,7 +76,7 @@ export function TodayExerciseRow({
         </span>
       </button>
       {removable && (
-        <button type="button" className="plan-remove" aria-label={`${name}を今日のメニューから外す`} onClick={onRemove}>
+        <button type="button" className="plan-remove" aria-label={`${name}を${dateLabel}のメニューから外す`} onClick={onRemove}>
           外す
         </button>
       )}
@@ -136,6 +139,7 @@ export function SessionDatePicker({
 
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
   const session = useSession();
+  const dateLabel = sessionDateLabel(session.date, new Date());
   const client = useClient();
   const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
@@ -186,7 +190,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   return (
     <section className="screen">
       <div className="today-head">
-        <h1 className="today-title">今日のトレーニング</h1>
+        <h1 className="today-title">{dateLabel}のトレーニング</h1>
         {auth.required && auth.email && (
           <button type="button" className="text-btn" onClick={auth.signOut}>
             ログアウト
@@ -283,6 +287,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
                   previous={previous}
                   today={today}
                   removable={editing && canEditMenu}
+                  dateLabel={dateLabel}
                   onOpen={() => navigate({ screen: "record", exercise: name })}
                   onRemove={() => askRemove(name, today.length)}
                 />
@@ -304,7 +309,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
             種目を追加
           </button>
           <button type="button" className="btn secondary" onClick={() => setConfirmEnd(true)}>
-            今日を終了
+            {dateLabel}を終了
           </button>
         </div>
       )}
@@ -336,7 +341,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       {confirmEnd && (
         <Modal
           titleId="end-title"
-          title="今日のトレーニングを終了しますか？"
+          title={`${dateLabel}のトレーニングを終了しますか？`}
           body={`記録済み ${recordedCount} / ${session.exercises.length} 種目です。終了後も「再開する」で続けられます。`}
           cancelLabel="キャンセル"
           confirmLabel="終了する"
@@ -353,7 +358,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <Modal
           titleId="remove-title"
           title={`「${pendingRemove}」を外しますか？`}
-          body={removalConfirmBody(pendingTodayCount)}
+          body={removalConfirmBody(pendingTodayCount, dateLabel)}
           cancelLabel="キャンセル"
           confirmLabel="外す"
           onCancel={() => setPendingRemove(null)}

@@ -10,6 +10,7 @@ import {
   resolveStoredSessionDate,
   sessionDateAfterLoad,
   sessionDateChoices,
+  sessionDateLabel,
   storeMenu,
   switchSessionDate,
   writeStoredSessionDate,
@@ -57,6 +58,25 @@ describe("tokyo session dates", () => {
       "2026-10-03",
       "2026-10-04",
     ]);
+  });
+});
+
+describe("sessionDateLabel", () => {
+  const onOct11 = new Date("2026-10-11T03:00:00.000Z");
+
+  it("stays 今日 on Tokyo today", () => {
+    expect(sessionDateLabel("2026-10-02", midday)).toBe("今日");
+    expect(sessionDateLabel("2026-10-03", justAfterTokyoMidnight)).toBe("今日");
+  });
+
+  it("names yesterday and tomorrow with the month and day", () => {
+    expect(sessionDateLabel("2026-10-10", onOct11)).toBe("10/10（前日）");
+    expect(sessionDateLabel("2026-10-12", onOct11)).toBe("10/12（翌日）");
+    expect(sessionDateLabel("2026-10-02", justAfterTokyoMidnight)).toBe("10/2（前日）");
+  });
+
+  it("does not call an older stored date 今日", () => {
+    expect(sessionDateLabel("2026-09-30", midday)).toBe("9/30");
   });
 });
 

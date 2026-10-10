@@ -1,4 +1,4 @@
-import { addDays, isISODate, tokyoCivilDate } from "./domain";
+import { addDays, formatMonthDay, isISODate, tokyoCivilDate } from "./domain";
 
 /**
  * Go API の SessionDateWindowDays と同じ。
@@ -49,6 +49,19 @@ export function sessionDateChoices(now: Date): SessionDateChoice[] {
 
 export function isWritableSessionDate(date: string, now: Date): boolean {
   return sessionDateChoices(now).some((choice) => choice.date === date);
+}
+
+/**
+ * 画面の「今日」。東京の今日なら「今日」のまま。
+ * 前日・翌日は「10/10（前日）」。それ以外の日付も「今日」とは書かない。
+ */
+export function sessionDateLabel(date: string, now: Date): string {
+  const today = tokyoCivilDate(now);
+  if (date === today) return "今日";
+  const relative = sessionDateChoicesFromToday(today).find((choice) => choice.date === date)?.label;
+  const day = formatMonthDay(date);
+  if (relative != null && relative !== "今日") return `${day}（${relative}）`;
+  return day;
 }
 
 /**
