@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -133,6 +134,48 @@ function changesSinceLastDeploy(repo, headSha, lastDeployedSha) {
 }
 
 /**
+ * Application commits on the first-parent line strictly after `headSha`.
+ * Empty when `headSha` is not on that line. Docs-only and empty commits are omitted.
+ * @param {string} repo
+ * @param {string} headSha
+ * @param {string} [tip]
+ * @returns {string[]}
+ */
+export function newerApplicationCommits(repo, headSha, tip = "HEAD") {
+  assertSha(headSha);
+  if (tip.startsWith("-") || tip.includes(" ")) {
+    throw new Error("tip must be a single git revision");
+  }
+  const resolvedTip = git(repo, ["rev-parse", "--verify", `${tip}^{commit}`])?.trim() ?? "";
+  assertSha(resolvedTip);
+  const line = firstParentLine(repo, resolvedTip);
+  const index = line.indexOf(headSha);
+  if (index < 0) return [];
+  /** @type {string[]} */
+  const newer = [];
+  for (const later of line.slice(index + 1)) {
+    const files = changedFiles(repo, later);
+    if (files.length === 0 || isDocsOnlyFileList(files)) continue;
+    newer.push(later);
+  }
+  return newer;
+}
+
+/**
+ * True when `lastDeployedSha` is `commitSha` or a descendant of it.
+ * Unknown history is false so the caller deploys.
+ * @param {string} repo
+ * @param {string | null | undefined} lastDeployedSha
+ * @param {string} commitSha
+ */
+function deployedContains(repo, lastDeployedSha, commitSha) {
+  if (typeof lastDeployedSha !== "string" || !SHA_RE.test(lastDeployedSha)) return false;
+  const exists = git(repo, ["cat-file", "-e", `${lastDeployedSha}^{commit}`], { allowFailure: true });
+  if (exists === null) return false;
+  return commitIsAncestor(repo, commitSha, lastDeployedSha) === true;
+}
+
+/**
  * Decide whether an automatic dev deploy should publish this CI SHA.
  * Manual workflow_dispatch does not call this.
  *
@@ -141,13 +184,16 @@ function changesSinceLastDeploy(repo, headSha, lastDeployedSha) {
  * pending deploy therefore cannot hide an application change: the run that
  * actually executes still sees every undeployed application file.
  * Unknown, unreachable, or non-ancestor baselines deploy the tested tip.
- * A newer application commit on main still skips, so an older run cannot
- * roll dev back and the newer SHA remains the one that deploys.
+ * An older SHA is skipped only when a newer application commit is already on
+ * dev, or that newer commit's own CI push has succeeded. A failed, still
+ * running, or unknown newer CI does not suppress the older tested SHA:
+ * a failed CI never starts deploy, so skipping the older SHA would leave
+ * dev behind.
  *
  * @param {string} repo
  * @param {string} headSha commit CI tested (`workflow_run.head_sha`)
  * @param {string} [tip] revision for current main. Default HEAD.
- * @param {{ lastDeployedSha?: string | null }} [options] last successful dev deployment
+ * @param {{ lastDeployedSha?: string | null, ciConclusions?: Record<string, string | null | undefined> }} [options]
  * @returns {{ deploy: boolean, sha: string, reason: string }}
  */
 export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
@@ -167,14 +213,22 @@ export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
     };
   }
 
-  for (const later of line.slice(index + 1)) {
-    const files = changedFiles(repo, later);
-    if (files.length === 0 || isDocsOnlyFileList(files)) continue;
-    return {
-      deploy: false,
-      sha: "",
-      reason: `a newer commit on main changes application files (${later})`,
-    };
+  const conclusions = options.ciConclusions ?? {};
+  for (const later of newerApplicationCommits(repo, headSha, tip)) {
+    if (deployedContains(repo, options.lastDeployedSha, later)) {
+      return {
+        deploy: false,
+        sha: "",
+        reason: `a newer application commit is already deployed (${later})`,
+      };
+    }
+    if (conclusions[later] === "success") {
+      return {
+        deploy: false,
+        sha: "",
+        reason: `a newer application commit already has a successful CI run (${later})`,
+      };
+    }
   }
 
   const since = changesSinceLastDeploy(repo, headSha, options.lastDeployedSha);
@@ -198,18 +252,54 @@ export function planAutoDeploy(repo, headSha, tip = "HEAD", options = {}) {
   return { deploy: true, sha: headSha, reason: DEPLOY_REASON };
 }
 
+const CI_CONCLUSION = /^(success|failure|pending|unknown)$/;
+
+/**
+ * @param {string} file
+ * @returns {Record<string, string>}
+ */
+function readConclusionsFile(file) {
+  /** @type {Record<string, string>} */
+  const clean = {};
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    return clean;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return clean;
+  for (const [sha, status] of Object.entries(parsed)) {
+    if (!SHA_RE.test(sha) || typeof status !== "string" || !CI_CONCLUSION.test(status)) continue;
+    clean[sha] = status;
+  }
+  return clean;
+}
+
 function parseArgs(argv) {
-  /** @type {{ headSha?: string, repo: string, tip: string, lastDeployedSha?: string }} */
-  const args = { repo: ".", tip: "HEAD" };
+  /** @type {{ headSha?: string, repo: string, tip: string, lastDeployedSha?: string, ciConclusions: Record<string, string>, conclusionsFile?: string }} */
+  const args = { repo: ".", tip: "HEAD", ciConclusions: {} };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
-    if (flag === "--head-sha" || flag === "--repo" || flag === "--tip" || flag === "--last-deployed-sha") {
+    if (
+      flag === "--head-sha" ||
+      flag === "--repo" ||
+      flag === "--tip" ||
+      flag === "--last-deployed-sha" ||
+      flag === "--ci-conclusion" ||
+      flag === "--ci-conclusions-file"
+    ) {
       if (!value || value.startsWith("-")) throw new Error(`${flag} requires a value`);
       if (flag === "--head-sha") args.headSha = value;
       if (flag === "--repo") args.repo = value;
       if (flag === "--tip") args.tip = value;
       if (flag === "--last-deployed-sha") args.lastDeployedSha = value;
+      if (flag === "--ci-conclusions-file") args.conclusionsFile = value;
+      if (flag === "--ci-conclusion") {
+        const match = /^([0-9a-f]{40})=(success|failure|pending|unknown)$/.exec(value);
+        if (!match) throw new Error("--ci-conclusion must be <sha>=success|failure|pending|unknown");
+        args.ciConclusions[match[1]] = match[2];
+      }
       i += 1;
       continue;
     }
@@ -221,7 +311,11 @@ function parseArgs(argv) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  const plan = planAutoDeploy(args.repo, args.headSha, args.tip, { lastDeployedSha: args.lastDeployedSha });
+  const fromFile = args.conclusionsFile ? readConclusionsFile(args.conclusionsFile) : {};
+  const plan = planAutoDeploy(args.repo, args.headSha, args.tip, {
+    lastDeployedSha: args.lastDeployedSha,
+    ciConclusions: { ...fromFile, ...args.ciConclusions },
+  });
   process.stdout.write(`${JSON.stringify(plan)}\n`);
 }
 

@@ -33,11 +33,11 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 `workflow_run` には `paths` フィルタがありません。gate は、GitHub Deployments の environment `dev` で最後に成功したデプロイの SHA から、テストした tip までの差分を見ます。push の `before` は使いません。CI がキャンセルされたり、`deploy-dev` の待ちが 1 本に置き換わったりしても、実行される run は未デプロイのアプリケーション変更を含んだ木をデプロイします。
 
-成功した `dev` の publish のあと、`record-dev-deployment` が同じ SHA で deployment を作り、status を `success` にします。このジョブに AWS 資格情報はありません。手動の `dev` も記録します。`staging` と `prod` は記録しません。これは `GITHUB_TOKEN` の `deployments: read` / `deployments: write` であり、OIDC ロールの権限は変わりません。
+成功した `dev` の publish のあと、`record-dev-deployment` が同じ SHA で deployment を作り、status を `success` にします。このジョブに AWS 資格情報はありません。手動の `dev` も記録します。`staging` と `prod` は記録しません。これは `GITHUB_TOKEN` の `deployments: read` / `deployments: write` と、新しいコミットの CI 結果を見る `actions: read` です。OIDC ロールの権限は変わりません。
 
 - その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけ、または差分が空なら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
 - 成功記録が無い、API が読めない、SHA がリポジトリに無い、テストした SHA の祖先でないときは、範囲が分からないので tip をデプロイします
-- テストしたコミットより新しいコミットがアプリケーションファイルを変えているときは、古い SHA をデプロイしません。遅い run が新しい `dev` を巻き戻さないためです。新しい方の CI が成功したときに、その SHA をデプロイします
+- テストしたコミットより新しいアプリケーションコミットが、すでに `dev` に載っているとき、またはそのコミット自身の push CI が成功しているときは、古い SHA をデプロイしません。成功した新しい方のデプロイが新しい木を出すためです。新しいコミットの CI が失敗、実行中、または不明なときは、失敗した CI はデプロイを起動しないので、テスト済みの古い SHA をデプロイします
 - 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします。そのドキュメントコミットの run が先に実行された場合も、最後の成功デプロイ以降にアプリケーション変更があれば、その tip をデプロイします
 - 判定できない SHA（`main` の first-parent に無い、など）はデプロイしません。手動の `workflow_dispatch` はこの判定をしません
 
@@ -53,7 +53,7 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 | ジョブ | AWS / `id-token` | 内容 |
 | --- | --- | --- |
-| `gate` | なし（`deployments: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV` と、最後に成功した dev デプロイ以降にアプリケーション変更があるかも見る |
+| `gate` | なし（`deployments: read`、`actions: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV`、最後に成功した dev デプロイ以降の差分、新しいコミットの CI が成功済みかも見る |
 | `build` | なし | `sam build`。成果物を artifact へ |
 | `deploy-stack` | OIDC | 検証済み SAM 成果物を `sam deploy`。公開スタック出力だけを artifact へ |
 | `build-spa` | なし | `npm ci` / `npm run build` / `check:secrets`（公開 Cognito・API URL のみ） |

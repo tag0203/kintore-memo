@@ -122,15 +122,46 @@ describe("planAutoDeploy", () => {
     }
   });
 
-  it("skips an older application SHA when a newer application commit is on main", () => {
+  it("skips an older SHA only when a newer application commit's CI succeeded or is already deployed", () => {
     const repo = initRepo();
     try {
       const older = commitFiles(repo, { "src/a.ts": "a\n" }, "a");
       const newer = commitFiles(repo, { "src/b.ts": "b\n" }, "b");
-      const olderPlan = planAutoDeploy(repo, older);
-      expect(olderPlan.deploy).toBe(false);
-      expect(olderPlan.reason).toContain(newer);
+      const succeeded = planAutoDeploy(repo, older, "HEAD", { ciConclusions: { [newer]: "success" } });
+      expect(succeeded.deploy).toBe(false);
+      expect(succeeded.reason).toContain(newer);
+      expect(planAutoDeploy(repo, older, "HEAD", { ciConclusions: { [newer]: "failure" } })).toMatchObject({
+        deploy: true,
+        sha: older,
+      });
+      expect(planAutoDeploy(repo, older, "HEAD", { ciConclusions: { [newer]: "pending" } })).toMatchObject({
+        deploy: true,
+        sha: older,
+      });
+      expect(planAutoDeploy(repo, older)).toMatchObject({ deploy: true, sha: older });
+      expect(planAutoDeploy(repo, older, "HEAD", { ciConclusions: { [newer]: "cancelled" } })).toMatchObject({
+        deploy: true,
+        sha: older,
+      });
+      expect(
+        planAutoDeploy(repo, older, "HEAD", {
+          lastDeployedSha: newer,
+          ciConclusions: { [newer]: "failure" },
+        }),
+      ).toMatchObject({
+        deploy: false,
+        reason: `a newer application commit is already deployed (${newer})`,
+      });
       expect(planAutoDeploy(repo, newer)).toMatchObject({ deploy: true, sha: newer });
+      const failedTip = commitFiles(repo, { "src/c.ts": "c\n" }, "app C");
+      expect(
+        planAutoDeploy(repo, older, "HEAD", {
+          ciConclusions: { [newer]: "success", [failedTip]: "failure" },
+        }).deploy,
+      ).toBe(false);
+      expect(
+        planAutoDeploy(repo, newer, "HEAD", { ciConclusions: { [failedTip]: "failure" } }),
+      ).toMatchObject({ deploy: true, sha: newer });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -187,20 +218,38 @@ describe("planAutoDeploy", () => {
     }
   });
 
-  it("skips a replaced older SHA when a newer application commit is on main", () => {
+  it("deploys an older tested SHA when the newer application commit's CI failed", () => {
     const repo = initRepo();
     try {
       const deployed = commitFiles(repo, { "README.md": "# base\n" }, "deployed");
       const older = commitFiles(repo, { "src/older.ts": "older\n" }, "app B");
       const newer = commitFiles(repo, { "src/newer.ts": "newer\n" }, "app D");
-      const olderPlan = planAutoDeploy(repo, older, "HEAD", { lastDeployedSha: deployed });
-      expect(olderPlan.deploy).toBe(false);
-      expect(olderPlan.reason).toContain(newer);
+      const docsAfter = commitFiles(repo, { "docs/note.md": "# note\n" }, "docs after D");
+      expect(
+        planAutoDeploy(repo, older, "HEAD", {
+          lastDeployedSha: deployed,
+          ciConclusions: { [newer]: "failure" },
+        }),
+      ).toMatchObject({ deploy: true, sha: older });
+      expect(
+        planAutoDeploy(repo, older, "HEAD", {
+          lastDeployedSha: deployed,
+          ciConclusions: { [newer]: "success" },
+        }),
+      ).toMatchObject({
+        deploy: false,
+        reason: `a newer application commit already has a successful CI run (${newer})`,
+      });
       expect(planAutoDeploy(repo, newer, "HEAD", { lastDeployedSha: deployed })).toMatchObject({
         deploy: true,
         sha: newer,
       });
-      expect(planAutoDeploy(repo, older, "HEAD", { lastDeployedSha: newer }).deploy).toBe(false);
+      expect(
+        planAutoDeploy(repo, older, "HEAD", {
+          lastDeployedSha: docsAfter,
+          ciConclusions: { [newer]: "failure" },
+        }).deploy,
+      ).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

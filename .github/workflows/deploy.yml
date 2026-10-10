@@ -77,6 +77,7 @@ jobs:
         )
       )
     permissions:
+      actions: read
       contents: read
       deployments: read
     outputs:
@@ -187,7 +188,15 @@ jobs:
             else
               echo "Could not read the last successful dev deployment. Deploying the tested tree."
             fi
-            PLAN_JSON="$(node scripts/auto-deploy-plan.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main "${LAST_ARGS[@]}")" \
+            CI_FILE="${RUNNER_TEMP}/newer-ci-conclusions.json"
+            CI_FILE_ARGS=()
+            # A failed lookup leaves every newer CI unknown. Unknown does not skip the tested SHA.
+            if node scripts/ci-conclusions.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main > "${CI_FILE}"; then
+              CI_FILE_ARGS=(--ci-conclusions-file "${CI_FILE}")
+            else
+              echo "Could not read CI results for newer commits. Deploying the tested tree unless a newer application commit is already on dev."
+            fi
+            PLAN_JSON="$(node scripts/auto-deploy-plan.mjs --head-sha "${HEAD_SHA}" --repo "${GITHUB_WORKSPACE}" --tip origin/main "${LAST_ARGS[@]}" "${CI_FILE_ARGS[@]}")" \
               || { echo "Could not plan the automatic deploy."; exit 1; }
             echo "Auto-deploy plan: ${PLAN_JSON}"
             DEPLOY="$(node -e 'const plan=JSON.parse(process.argv[1]); if(plan.deploy!==true&&plan.deploy!==false) process.exit(2); if(plan.deploy&&!/^[0-9a-f]{40}$/.test(plan.sha)) process.exit(2); process.stdout.write(plan.deploy?"true":"false")' "${PLAN_JSON}")" \
