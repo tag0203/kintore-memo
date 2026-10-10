@@ -140,19 +140,21 @@ func TestHealthAndStagePath(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Body), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["ok"] != true || body["service"] != "kintore-memo" || body["stage"] != "dev" || body["notionConfigured"] != true || body["tableName"] != "kintore-memo-dev" {
+	if res.Body != `{"ok":true}` || len(body) != 1 || body["ok"] != true {
 		t.Fatalf("body = %s", res.Body)
 	}
-	if strings.Contains(res.Body, "secret_token") {
-		t.Fatal("health echoed the token")
+	for _, key := range []string{"service", "stage", "notionConfigured", "tableName", "secret_token", "kintore-memo-dev"} {
+		if strings.Contains(res.Body, key) {
+			t.Fatalf("health included %s: %s", key, res.Body)
+		}
 	}
 
 	for _, stage := range []string{"staging", "prod"} {
 		event = httpEvent("GET", "/"+stage+"/api/health", stage, "", "", false)
 		event.RouteKey = "GET /api/health"
 		res, _ = h.Handle(context.Background(), event)
-		if res.StatusCode != 200 {
-			t.Fatalf("%s health %d", stage, res.StatusCode)
+		if res.StatusCode != 200 || res.Body != `{"ok":true}` {
+			t.Fatalf("%s health %d %s", stage, res.StatusCode, res.Body)
 		}
 	}
 }

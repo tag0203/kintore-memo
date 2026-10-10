@@ -416,7 +416,7 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14" \
+            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14" "ReservedConcurrency=0" \
             2>&1 | node "${GITHUB_WORKSPACE}/scripts/filter-sam-deploy-log.mjs"
           echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
 

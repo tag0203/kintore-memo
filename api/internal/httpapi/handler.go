@@ -115,7 +115,7 @@ func (h *Handler) Handle(ctx context.Context, event events.APIGatewayV2HTTPReque
 		return h.handleDayPlan(ctx, event, method), nil
 	}
 	if isHealth(event) {
-		return jsonResponse(200, healthBody(h.getenv)), nil
+		return jsonResponse(200, healthBody()), nil
 	}
 
 	body, status, err := h.route(ctx, event, method, path)
@@ -318,29 +318,13 @@ func (h *Handler) getenv(key string) string {
 }
 
 type health struct {
-	OK               bool    `json:"ok"`
-	Service          string  `json:"service"`
-	Stage            string  `json:"stage"`
-	NotionConfigured bool    `json:"notionConfigured"`
-	TableName        *string `json:"tableName"`
+	OK bool `json:"ok"`
 }
 
-func healthBody(getenv func(string) string) health {
-	stage := getenv("ENVIRONMENT")
-	if stage == "" {
-		stage = "local"
-	}
-	var table *string
-	if name := getenv("TABLE_NAME"); name != "" {
-		table = &name
-	}
-	return health{
-		OK:               true,
-		Service:          "kintore-memo",
-		Stage:            stage,
-		NotionConfigured: secrets.Configured(getenv),
-		TableName:        table,
-	}
+// healthBody is the unauthenticated liveness payload. It does not report the
+// stage, table name, or whether Notion is configured.
+func healthBody() health {
+	return health{OK: true}
 }
 
 func resolvePath(event events.APIGatewayV2HTTPRequest) string {

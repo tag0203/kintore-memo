@@ -36,6 +36,61 @@ describe("GitHub OIDC bootstrap", () => {
     expect(template).toContain("DenyAccessKeys");
   });
 
+  it("can set and clear reserved concurrency only on the API functions", () => {
+    const statement = template.slice(
+      template.indexOf("Sid: LambdaAppFunctions"),
+      template.indexOf("Sid: PassRoleToLambdaOnly"),
+    );
+    expect(statement).toContain("lambda:PutFunctionConcurrency");
+    expect(statement).toContain("lambda:DeleteFunctionConcurrency");
+    expect(statement).toContain("function:kintore-memo-*-api");
+    expect(statement).not.toContain('Resource: "*"');
+  });
+
+  it("can create the HTTP API access log group and the log delivery the stage needs", () => {
+    const groups = template.slice(
+      template.indexOf("Sid: ApiLogGroups"),
+      template.indexOf("Sid: HttpApiAccessLogDelivery"),
+    );
+    expect(groups).toContain("logs:CreateLogGroup");
+    expect(groups).toContain("log-group:/aws/apigateway/kintore-memo-*-http");
+    expect(groups).not.toContain('Resource: "*"');
+
+    const delivery = template.slice(
+      template.indexOf("Sid: HttpApiAccessLogDelivery"),
+      template.indexOf("Sid: HttpApi\n"),
+    );
+    for (const action of [
+      "logs:CreateLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
+      "logs:DescribeResourcePolicies",
+    ]) {
+      expect(delivery).toContain(action);
+    }
+    expect(delivery).toContain('Resource: "*"');
+    for (const action of [
+      "logs:GetLogEvents",
+      "logs:FilterLogEvents",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:DeleteResourcePolicy",
+    ]) {
+      expect(delivery).not.toContain(action);
+    }
+  });
+
+  it("keeps stage updates, including access log settings, on the existing /apis verbs", () => {
+    const statement = template.slice(template.indexOf("Sid: HttpApi\n"), template.indexOf("Sid: CognitoCreateUserPool"));
+    for (const action of ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]) {
+      expect(statement).toContain(action);
+    }
+    expect(statement).toContain("arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*");
+  });
+
   it("allows HTTP API stage tagging on this region's /apis ARN only", () => {
     const policy = template.slice(
       template.indexOf("HttpApiStageTagPolicy:"),

@@ -8,6 +8,14 @@ const TTL_ATTRIBUTE = "ttl";
 
 const templatePath = fileURLToPath(new URL("./template.yaml", import.meta.url));
 const template = readFileSync(templatePath, "utf8");
+const deployWorkflow = readFileSync(
+  fileURLToPath(new URL("../.github/workflows/deploy.yml", import.meta.url)),
+  "utf8",
+);
+const samconfig = readFileSync(fileURLToPath(new URL("./samconfig.toml", import.meta.url)), "utf8");
+
+const accessLogFormat =
+  '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationErrorMessage":"$context.integrationErrorMessage","authorizerError":"$context.authorizer.error"}';
 
 function statement(sid) {
   const start = template.indexOf(`Sid: ${sid}`);
@@ -94,6 +102,48 @@ describe("HttpApi CORS", () => {
     }
     expect(events.some((block) => /Method:\s*ANY/.test(block))).toBe(false);
     expect(events.some((block) => /Method:\s*OPTIONS/.test(block))).toBe(false);
+  });
+});
+
+describe("HttpApi throttling and access logs", () => {
+  it("throttles every route at 10 rps with a burst of 20", () => {
+    const httpApi = template.slice(template.indexOf("  HttpApi:"), template.indexOf("  ApiFunctionLogGroup:"));
+    expect(httpApi).toContain("DefaultRouteSettings:");
+    expect(httpApi).toContain("ThrottlingRateLimit: 10");
+    expect(httpApi).toContain("ThrottlingBurstLimit: 20");
+    expect(httpApi).not.toContain("DataTraceEnabled");
+    expect(httpApi).not.toContain("LoggingLevel");
+  });
+
+  it("writes a 14-day JSON access log without credentials or JWT claims", () => {
+    const group = template.slice(
+      template.indexOf("  HttpApiAccessLogGroup:"),
+      template.indexOf("  HttpApi:"),
+    );
+    expect(group).toContain("Type: AWS::Logs::LogGroup");
+    expect(group).toContain("LogGroupName: !Sub /aws/apigateway/${ProjectName}-${Environment}-http");
+    expect(group).toContain("RetentionInDays: 14");
+
+    const httpApi = template.slice(template.indexOf("  HttpApi:"), template.indexOf("  ApiFunctionLogGroup:"));
+    expect(httpApi).toContain("AccessLogSettings:");
+    expect(httpApi).toContain("DestinationArn: !GetAtt HttpApiAccessLogGroup.Arn");
+    const formatLine = httpApi.split("\n").find((line) => line.includes("Format:"));
+    expect(formatLine).toBe(`        Format: '${accessLogFormat}'`);
+    for (const secret of ["Authorization", "claims", "email", "sub", "$request.header", "$context.identity.user"]) {
+      expect(formatLine).not.toContain(secret);
+    }
+  });
+});
+
+describe("ReservedConcurrency", () => {
+  it("defaults to unset and only allows 0, empty, or 2-5", () => {
+    expect(template).toContain('Default: "0"');
+    expect(template).toContain('AllowedPattern: "^$|^0$|^[2-5]$"');
+    expect(template).toContain("HasReservedConcurrency:");
+    expect(template).toContain('!Ref "AWS::NoValue"');
+    expect(template).toContain("ReservedConcurrentExecutions: !If");
+    expect(deployWorkflow).toContain('"ReservedConcurrency=0"');
+    expect(samconfig).toContain("ReservedConcurrency=0");
   });
 });
 

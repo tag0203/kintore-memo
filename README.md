@@ -77,7 +77,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 
 | メソッド | 経路 | 内容 |
 | --- | --- | --- |
-| GET | `/api/health` | 死活。秘密は返さない |
+| GET | `/api/health` | 死活。本文は `{"ok":true}` だけ |
 | GET | `/api/exercises` | 種目一覧 |
 | GET | `/api/exercises/recent` | 記録日が新しい順 |
 | GET | `/api/logs/previous?exercise=&before=YYYY-MM-DD` | その種目で、その日より前に記録がある最新の日の行をすべて |
