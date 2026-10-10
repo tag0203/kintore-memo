@@ -87,10 +87,12 @@ flowchart TB
 | JWT Authorizer | API Gateway がトークンを検証する。Lambda に独自認証を積まない |
 | DynamoDB | オンデマンドの単一テーブル。DayPlan と任意の短い TTL キャッシュ。[dynamodb.md](./dynamodb.md) |
 | SSM Parameter Store | Notion のトークンとデータベース ID。SecureString。名前と IAM は SAM。値は CFN が SecureString を作れないため CLI で作成（[aws-deploy.md](./aws-deploy.md)） |
-| CloudWatch Logs | Lambda のログ。保持は 7〜14 日 |
+| CloudWatch Logs | Lambda のログ（保持 7〜14 日）と、HTTP API のアクセスログ（保持 14 日）。アクセスログに Authorization と JWT クレーム（`sub` を含む）は書かない |
 | IAM | Lambda は対象テーブル、対象パラメータ、自ログだけ |
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
 | GitHub Actions + OIDC | CI は毎回。`main` の CI 成功後に `dev` へ自動デプロイし、`staging` / `prod` は手動。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
+
+HTTP API は全ルートを持続 10 rps、バースト 20 でスロットリングします。Lambda の予約同時実行は既定で付けません。新規アカウントは同時実行クォータが 10 のことがあり、他の関数の予約を引いた未予約枠が 10 未満になるとデプロイが失敗するためです。確認と有効化は [aws-deploy.md](./aws-deploy.md) です。
 
 IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
@@ -178,7 +180,7 @@ Go Lambda（`api/`）はこれを次の形で行う。画面（[#12](https://git
 
 API の形は参考実装に揃えています。`worker/` は本番では呼びません。
 
-- `GET /api/health`
+- `GET /api/health`（本文は `{"ok":true}` だけ。ステージ、テーブル名、Notion の設定有無は返さない）
 - `GET /api/exercises`
 - `GET /api/exercises/recent`
 - `GET /api/logs/previous?exercise=&before=YYYY-MM-DD`
