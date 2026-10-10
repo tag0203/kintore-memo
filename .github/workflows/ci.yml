@@ -18,6 +18,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  push-range:
+    name: Record push baseline
+    # Every push, so a non-main branch still exercises the upload. Deploy reads
+    # the artifact only from a main CI run.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Write the push before SHA
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/push-range"
+          # github.event.before is the previous tip of the ref. The zero SHA
+          # means the ref was created. workflow_run does not include this value.
+          if [[ "${PUSH_BEFORE}" =~ ^[0-9a-f]{40}$ ]] && [ "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            printf '%s\n' "${PUSH_BEFORE}" > "$RUNNER_TEMP/push-range/before.txt"
+          else
+            printf 'unknown\n' > "$RUNNER_TEMP/push-range/before.txt"
+          fi
+
+      - name: Upload push before SHA
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ci-push-before
+          path: ${{ runner.temp }}/push-range/before.txt
+          if-no-files-found: error
+          retention-days: 1
+
   app:
     name: test, typecheck, build, secrets
     runs-on: ubuntu-latest

@@ -20,7 +20,9 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 - 対象ブランチは `main`
 - 起動元イベントは `push`（pull request や CI の手動実行ではデプロイしない）
 - `github.event.workflow_run.conclusion == 'success'`
-- 起動元の path はこのリポジトリの `.github/workflows/ci.yml`
+- 起動元の workflow 名は `CI`、workflow id は `372805829`（このリポジトリの `.github/workflows/ci.yml`）
+- `path` は `.github/workflows/ci.yml`、またはその後ろに `@main` / `@refs/heads/main` / `@<40桁の sha>` が付いた形。Workflow Run の REST 例は `.github/workflows/build.yml@main` で、このリポジトリの現行レスポンスは接尾辞なし。ファイル部分と ref を分けて見る
+- `head_repository` の full name と id が、実行中のリポジトリかつ id `1389679197` と一致すること。fork の head は拒否する
 - デプロイ先は `dev` 固定。`staging` / `prod` は手動の `workflow_dispatch` だけ
 
 `test` workflow（`test.yml`）は待ちません。中身は `npm test`、`go test`、Lambda バイナリのコンパイルで、CI の app ジョブがそれに加えて型チェック、ビルド、`check:secrets`、SAM の validate / build を実行します。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、両方を書くと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
@@ -29,9 +31,10 @@ checkout するコミットは `github.event.workflow_run.head_sha` です。`wo
 
 同じ環境へのデプロイは concurrency group `deploy-<environment>` で重ねません。進行中のデプロイはキャンセルしません。自動実行は手動の `dev` と同じ `deploy-dev` に入ります。`staging` と `prod` の手動実行は別グループのままです。
 
-`workflow_run` には `paths` フィルタがありません。gate が、テストした SHA と、そのあと `main` の first-parent に乗った各コミットの変更ファイルを見ます。
+`workflow_run` には `paths` フィルタがありません。CI は `push` の `github.event.before` を artifact `ci-push-before` に残します。workflow run の API にはその値がないためです。gate は `before` からテストした tip までの差分を見ます。tip だけがドキュメントでも、同じ push の途中にアプリケーション変更があれば、CI がテストした tip をデプロイします。
 
-- 変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけなら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
+- その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけなら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
+- `before` が読めない、ゼロ SHA、リポジトリに無いオブジェクトのときは、範囲が分からないので tip をデプロイします
 - テストしたコミットより新しいコミットがアプリケーションファイルを変えているときは、古い SHA をデプロイしません。遅い CI が新しい `dev` を巻き戻さないためです。新しい方の CI が成功したときに、その SHA をデプロイします
 - 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします
 - 判定できない SHA（`main` の first-parent に無い、など）はデプロイしません。手動の `workflow_dispatch` はこの判定をしません

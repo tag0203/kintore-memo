@@ -8,7 +8,11 @@ import { isDocsOnlyFileList, isDocsPath, planAutoDeploy } from "./auto-deploy-pl
 
 /** @param {string} repo @param {string[]} args */
 function git(repo, args) {
-  execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  execFileSync("git", args, {
+    cwd: repo,
+    stdio: "ignore",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" },
+  });
 }
 
 function initRepo() {
@@ -16,6 +20,7 @@ function initRepo() {
   git(root, ["init", "-b", "main"]);
   git(root, ["config", "user.email", "test@example.com"]);
   git(root, ["config", "user.name", "auto-deploy test"]);
+  git(root, ["config", "commit.gpgsign", "false"]);
   return root;
 }
 
@@ -33,6 +38,10 @@ function commitFiles(repo, files, message) {
 
 function head(repo) {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+}
+
+function parentOf(repo, sha) {
+  return execFileSync("git", ["rev-parse", `${sha}^`], { cwd: repo, encoding: "utf8" }).trim();
 }
 
 describe("docs path filter", () => {
@@ -59,23 +68,25 @@ describe("planAutoDeploy", () => {
       expect(planAutoDeploy(repo, sha)).toEqual({
         deploy: true,
         sha,
-        reason: "CI passed for this application commit and main has no newer application commit",
+        reason: "push range is unknown, so deploy the tested tree",
       });
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });
 
-  it("skips a docs-only or markdown-only commit", () => {
+  it("skips a push whose whole range is docs or markdown", () => {
     const repo = initRepo();
     try {
+      const base = commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
       const sha = commitFiles(
         repo,
         { "README.md": "# hi\n", "docs/images/diagram.png": "png\n" },
         "docs",
       );
-      expect(planAutoDeploy(repo, sha).deploy).toBe(false);
-      expect(planAutoDeploy(repo, sha).reason).toBe("tested commit changes only docs or markdown");
+      const plan = planAutoDeploy(repo, sha, "HEAD", { beforeSha: base });
+      expect(plan.deploy).toBe(false);
+      expect(plan.reason).toBe("pushed range changes only docs or markdown");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -87,10 +98,11 @@ describe("planAutoDeploy", () => {
       commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
       git(repo, ["commit", "--allow-empty", "-m", "empty"]);
       const sha = head(repo);
-      expect(planAutoDeploy(repo, sha)).toMatchObject({
+      const before = parentOf(repo, sha);
+      expect(planAutoDeploy(repo, sha, "HEAD", { beforeSha: before })).toMatchObject({
         deploy: false,
         sha: "",
-        reason: "tested commit has no file changes",
+        reason: "pushed range has no file changes",
       });
     } finally {
       rmSync(repo, { recursive: true, force: true });
@@ -104,7 +116,7 @@ describe("planAutoDeploy", () => {
       commitFiles(repo, { "docs/aws-deploy.md": "# deploy\n" }, "docs");
       expect(planAutoDeploy(repo, app).deploy).toBe(true);
       expect(planAutoDeploy(repo, app).sha).toBe(app);
-      expect(planAutoDeploy(repo, head(repo)).deploy).toBe(false);
+      expect(planAutoDeploy(repo, head(repo), "HEAD", { beforeSha: app }).deploy).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -119,6 +131,39 @@ describe("planAutoDeploy", () => {
       expect(olderPlan.deploy).toBe(false);
       expect(olderPlan.reason).toContain(newer);
       expect(planAutoDeploy(repo, newer)).toMatchObject({ deploy: true, sha: newer });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("deploys the tested tip when an earlier commit in the same push changes the app", () => {
+    const repo = initRepo();
+    try {
+      const before = commitFiles(repo, { "README.md": "# base\n" }, "base");
+      commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
+      const tip = commitFiles(repo, { "docs/aws-deploy.md": "# docs\n" }, "docs tip");
+      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: before })).toMatchObject({
+        deploy: true,
+        sha: tip,
+        reason: "CI passed for this push and main has no newer application commit",
+      });
+      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: parentOf(repo, tip) }).deploy).toBe(false);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("deploys when the push baseline is missing or not in the repository", () => {
+    const repo = initRepo();
+    try {
+      const base = commitFiles(repo, { "src/app.ts": "export {}\n" }, "app");
+      const tip = commitFiles(repo, { "README.md": "# only docs\n" }, "docs");
+      expect(planAutoDeploy(repo, tip).deploy).toBe(true);
+      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: "0".repeat(40) }).deploy).toBe(true);
+      expect(
+        planAutoDeploy(repo, tip, "HEAD", { beforeSha: "b".repeat(40) }),
+      ).toMatchObject({ deploy: true, sha: tip });
+      expect(planAutoDeploy(repo, tip, "HEAD", { beforeSha: base }).deploy).toBe(false);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -170,7 +215,7 @@ describe("planAutoDeploy", () => {
       expect(JSON.parse(output)).toEqual({
         deploy: true,
         sha,
-        reason: "CI passed for this application commit and main has no newer application commit",
+        reason: "push range is unknown, so deploy the tested tree",
       });
     } finally {
       rmSync(repo, { recursive: true, force: true });
