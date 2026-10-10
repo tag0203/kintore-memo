@@ -26,6 +26,11 @@ describe("GitHub OIDC bootstrap", () => {
     expect(template).toContain("ref:refs/heads/${AllowedBranch}");
   });
 
+  it("points the deploy role output at the Actions secret, not a variable", () => {
+    expect(template).toContain("GitHub Actions secret AWS_DEPLOY_ROLE_ARN. Do not commit the value.");
+    expect(template).not.toContain("GitHub Actions variable AWS_DEPLOY_ROLE_ARN");
+  });
+
   it("keeps Notion SSM and access-key denies on the deploy role", () => {
     expect(template).toContain("DenyNotionParameterAccess");
     expect(template).toContain("DenyAccessKeys");

@@ -1,5 +1,8 @@
 # OIDC deploy. No long-lived AWS access keys.
-# No-op (success) when the repository variable AWS_DEPLOY_ROLE_ARN is unset.
+# No-op (success) when the repository secret AWS_DEPLOY_ROLE_ARN is unset.
+# Do not read that ARN from an Actions variable. The runner prints step env and
+# action inputs before add-mask, and variables are not auto-masked, so a
+# fallback would put the role ARN (and the AWS account ID) in the log.
 # Do not add AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY.
 # Do not use `set -x`, `sam deploy --debug`, or `aws --debug` — they can print credentials.
 # This workflow does not read SSM parameters.
@@ -100,7 +103,7 @@ jobs:
       - name: Skip until the OIDC role exists
         id: gate
         env:
-          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           AUTO_DEPLOY_DEV: ${{ vars.AUTO_DEPLOY_DEV }}
           INPUT_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || '' }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -154,7 +157,7 @@ jobs:
           fi
 
           if [ -z "${AWS_DEPLOY_ROLE_ARN}" ]; then
-            skip "AWS_DEPLOY_ROLE_ARN is unset. Deploy is a no-op until the OIDC role exists. See docs/github-actions-oidc.md."
+            skip "AWS_DEPLOY_ROLE_ARN secret is unset. Deploy is a no-op until you create that Actions secret (Settings → Secrets and variables → Actions → Secrets) with the deploy role ARN, then delete the repository variable of the same name. A variable is not used: it would be printed in this env block. See docs/github-actions-oidc.md."
           fi
           if ! [[ "${AWS_DEPLOY_ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]]; then
             echo "AWS_DEPLOY_ROLE_ARN is set but is not an IAM role ARN. Not assuming it."
@@ -166,10 +169,10 @@ jobs:
             echo "This workflow only assumes the deploy role from refs/heads/main."
             exit 1
           fi
-          # Mask after the shape check so later steps do not print the ARN.
-          # This does not hide the env block above: the runner prints step env
-          # before add-mask. GITHUB_TOKEN cannot read Actions variables, so do not
-          # fetch the ARN from the variables API to mask it earlier.
+          # The secret context is already masked in the env dump above.
+          # add-mask still covers any later plain echo of the ARN in this step.
+          # Do not fetch an Actions variable to fill a missing secret. GITHUB_TOKEN
+          # cannot read variables, and a variable value would show up in this env block.
           echo "::add-mask::${AWS_DEPLOY_ROLE_ARN}"
 
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
@@ -377,7 +380,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-1
           role-session-name: gha-kintore-memo-deploy
           mask-aws-account-id: true
@@ -388,6 +391,8 @@ jobs:
         working-directory: infra
         env:
           ENVIRONMENT: ${{ needs.gate.outputs.environment }}
+          # Python block-buffers stdout when piped. This keeps progress lines moving.
+          PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
@@ -401,6 +406,8 @@ jobs:
               exit 1
               ;;
           esac
+          # Drop the stack Outputs table. pipefail still fails the step when sam fails.
+          # Progress and error lines stay. Values are read later with describe-stacks.
           sam deploy \
             --template-file .aws-sam/build/template.yaml \
             --region ap-northeast-1 \
@@ -409,7 +416,8 @@ jobs:
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
-            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14"
+            --parameter-overrides "ProjectName=kintore-memo" "Environment=${ENVIRONMENT}" "LogRetentionDays=14" \
+            2>&1 | node "${GITHUB_WORKSPACE}/scripts/filter-sam-deploy-log.mjs"
           echo "sam deploy finished for kintore-memo-${ENVIRONMENT}."
 
       - name: Export public stack outputs for SPA build
@@ -442,6 +450,13 @@ jobs:
           API_URL="${API_URL%/}"
           SPA_BUCKET="$(read_output SpaBucketName)"
           DIST_ID="$(read_output CloudFrontDistributionId)"
+          # describe-stacks stdout is captured above and is not echoed.
+          # Mask before later commands so a CLI error cannot print the ids.
+          if [ -n "${USER_POOL_ID}" ]; then echo "::add-mask::${USER_POOL_ID}"; fi
+          if [ -n "${CLIENT_ID}" ]; then echo "::add-mask::${CLIENT_ID}"; fi
+          if [ -n "${API_URL}" ]; then echo "::add-mask::${API_URL}"; fi
+          if [ -n "${SPA_BUCKET}" ]; then echo "::add-mask::${SPA_BUCKET}"; fi
+          if [ -n "${DIST_ID}" ]; then echo "::add-mask::${DIST_ID}"; fi
           if ! [[ "${USER_POOL_ID}" =~ ^ap-northeast-1_[A-Za-z0-9]+$ ]]; then
             echo "Refusing to continue: UserPoolId did not match the Cognito pool id pattern."
             exit 1
@@ -528,6 +543,11 @@ jobs:
           # shellcheck disable=SC1091
           source /tmp/spa-publish/env.txt
           set +a
+          if [ -n "${VITE_COGNITO_USER_POOL_ID:-}" ]; then echo "::add-mask::${VITE_COGNITO_USER_POOL_ID}"; fi
+          if [ -n "${VITE_COGNITO_CLIENT_ID:-}" ]; then echo "::add-mask::${VITE_COGNITO_CLIENT_ID}"; fi
+          if [ -n "${VITE_API_BASE_URL:-}" ]; then echo "::add-mask::${VITE_API_BASE_URL}"; fi
+          if [ -n "${SPA_BUCKET:-}" ]; then echo "::add-mask::${SPA_BUCKET}"; fi
+          if [ -n "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]; then echo "::add-mask::${CLOUDFRONT_DISTRIBUTION_ID}"; fi
           if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
             echo "Automatic deploy is limited to dev."
             exit 1
@@ -608,7 +628,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ap-northeast-1
           role-session-name: gha-kintore-memo-publish
           mask-aws-account-id: true
@@ -622,6 +642,11 @@ jobs:
           # shellcheck disable=SC1091
           source /tmp/spa-publish/env.txt
           set +a
+          if [ -n "${VITE_COGNITO_USER_POOL_ID:-}" ]; then echo "::add-mask::${VITE_COGNITO_USER_POOL_ID}"; fi
+          if [ -n "${VITE_COGNITO_CLIENT_ID:-}" ]; then echo "::add-mask::${VITE_COGNITO_CLIENT_ID}"; fi
+          if [ -n "${VITE_API_BASE_URL:-}" ]; then echo "::add-mask::${VITE_API_BASE_URL}"; fi
+          if [ -n "${SPA_BUCKET:-}" ]; then echo "::add-mask::${SPA_BUCKET}"; fi
+          if [ -n "${CLOUDFRONT_DISTRIBUTION_ID:-}" ]; then echo "::add-mask::${CLOUDFRONT_DISTRIBUTION_ID}"; fi
           if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ] && [ "${ENVIRONMENT}" != "dev" ]; then
             echo "Automatic deploy is limited to dev."
             exit 1

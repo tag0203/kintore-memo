@@ -457,7 +457,7 @@ Resources:
 
 Outputs:
   DeployRoleArn:
-    Description: GitHub Actions variable AWS_DEPLOY_ROLE_ARN. Do not commit the value.
+    Description: GitHub Actions secret AWS_DEPLOY_ROLE_ARN. Do not commit the value.
     Value: !GetAtt GitHubDeployRole.Arn
   ApiFunctionPermissionsBoundaryArn:
     Description: Attach this ARN as PermissionsBoundary on kintore-memo-*-api (infra/template.yaml).

@@ -2,14 +2,14 @@
 
 Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のスライスです。CI は pull request と `main` で毎回動きます。`main` への push で CI が成功すると `dev` へ自動デプロイします。`staging` と `prod`、それに任意の再実行は手動です。OIDC ロールが無い間は、自動も手動も成功したまま何もしません。
 
-長期のアクセスキー（`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`）は使いません。リポジトリの Secrets にも置きません。
+長期のアクセスキー（`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`）は使いません。リポジトリの Secrets にも置きません。Secret に置くのはデプロイロールの ARN（`AWS_DEPLOY_ROLE_ARN`）だけです。アクセスキーではありません。
 
 ## ワークフロー
 
 | ファイル | いつ動くか | 内容 |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
-| `.github/workflows/deploy.yml` | `main` への push で CI が成功したあと（自動は `dev` だけ）。Actions タブからの手動実行（`dev` / `staging` / `prod`） | 下の変数が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
+| `.github/workflows/deploy.yml` | `main` への push で CI が成功したあと（自動は `dev` だけ）。Actions タブからの手動実行（`dev` / `staging` / `prod`） | Secret `AWS_DEPLOY_ROLE_ARN` が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
 
@@ -55,7 +55,7 @@ gate の checkout は `fetch-depth: 0` でも、この run がキューに入っ
 
 | ジョブ | AWS / `id-token` | 内容 |
 | --- | --- | --- |
-| `gate` | なし（`contents: read`、`deployments: read`、`actions: read`） | 変数と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV`、最後に成功した dev デプロイ以降の差分、新しいコミットの CI が成功済みかも見る。`origin/main` の更新は git Basic |
+| `gate` | なし（`contents: read`、`deployments: read`、`actions: read`） | Secret `AWS_DEPLOY_ROLE_ARN` と `refs/heads/main` を確認。未設定なら以降を skip。自動実行では `AUTO_DEPLOY_DEV`、最後に成功した dev デプロイ以降の差分、新しいコミットの CI が成功済みかも見る。`origin/main` の更新は git Basic |
 | `build` | なし | `sam build`。成果物を artifact へ |
 | `deploy-stack` | OIDC | 検証済み SAM 成果物を `sam deploy`。公開スタック出力だけを artifact へ |
 | `build-spa` | なし | `npm ci` / `npm run build` / `check:secrets`（公開 Cognito・API URL のみ） |
@@ -67,7 +67,8 @@ gate の checkout は `fetch-depth: 0` でも、この run がキューに入っ
 ## ログに出さないもの
 
 - ワークフローは `set -x`、`sam --debug`、`aws --debug` を使いません。
-- ロール ARN は形を確認したあとマスクします。runner は `add-mask` より前にステップの env を出すので、gate の env ブロックには ARN が出ます。アカウント ID は秘密ではありません。変数 API ではマスクしません。`GITHUB_TOKEN` に付与できる権限に Variables の read はなく、そのための PAT は置きません。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
+- ロール ARN は Secret です。GitHub はステップの env と action の `with:` を出す前に、その値を `***` にします。形の確認はスクリプトの中で行い、値そのものは出しません。同じ名前の Variable へはフォールバックしません。Variable は自動では伏せられず、runner は `add-mask` より前に env と `with:` を出すので、フォールバックを書くとアカウント ID が再び平文になります。`GITHUB_TOKEN` に Variables の read はなく、そのための PAT は置きません。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
+- `sam deploy` の出力は `scripts/filter-sam-deploy-log.mjs` を通します。`CloudFormation outputs from deployed stack` から `Successfully created/updated stack` の手前までを捨て、進捗とエラーは残します。`pipefail` なので SAM が失敗すればステップも失敗します。スタックの値は `describe-stacks` で取り、コマンド置換に入れてログには出しません。CloudFront のディストリビューション ID、SPA バケット名、Cognito の ID、API の URL は、次のコマンドの前に `add-mask` します。
 - ジョブ開始時にアクセスキー系の環境変数があると、引き受ける前に失敗します。
 - デプロイロールは Notion 用 SSM パラメータの読み書きを明示的に拒否します。値は [aws-deploy.md](./aws-deploy.md) のとおり、手元の CLI で作ります。ワークフローはパラメータ名を解決しません。
 - `npm run check:secrets` は (1) ブラウザ側と `dist/` にトークン名・ホストが無いこと、(2) **追跡ファイル全体**に Notion トークン値（`ntn_…` / `secret_…`）が無いことを見ます。漏れていたらファイルパスとパターン名だけを出し、一致した中身は出しません。
@@ -111,7 +112,19 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-GitHub の **Settings → Secrets and variables → Actions → Variables** に、名前 `AWS_DEPLOY_ROLE_ARN` でその ARN を追加します。Secrets には置きません。変数が無い、または空のとき、Deploy ワークフローは AWS を呼ばずに成功します。
+GitHub の **Settings → Secrets and variables → Actions → Secrets** に、名前 `AWS_DEPLOY_ROLE_ARN` でその ARN を追加します。Variables には置きません。Secret が無い、または空のとき、Deploy ワークフローは AWS を呼ばずに成功します。
+
+### すでに Variable にある場合
+
+`main` の古いワークフローは Variable の `AWS_DEPLOY_ROLE_ARN` を読みます。Secret を先に作り、この変更が `main` に入ってから Variable を消します。先に Variable を消すと、マージまでの自動デプロイが止まります。
+
+1. **Settings → Secrets and variables → Actions → Secrets** で、名前 `AWS_DEPLOY_ROLE_ARN`、値はいまの Variable と同じロール ARN を追加する
+2. この変更を `main` にマージする
+3. 同じ画面の **Variables** から `AWS_DEPLOY_ROLE_ARN` を削除する
+
+Secret を作る前にマージした場合、そのデプロイは成功のまま何もしません。Secret を作ったあと、Actions の **Deploy** を `main` で手動実行します。Variable へのフォールバックはありません。Secret が空のときに Variable を `env` や `with:` へ足すと、runner がその値を平文で出すためです。
+
+この移行で `infra/github-oidc.yaml` の出力説明は Secret 向けに直しています。ロールの ARN は変わらないので、OIDC スタックの再適用は要りません。
 
 ## 信頼ポリシー
 
@@ -182,7 +195,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 
 ## デプロイの実行
 
-`AWS_DEPLOY_ROLE_ARN` を保存したあと、`main` への push で CI が成功すると `dev` は自動でデプロイされます。ロール変数が空の間は、その実行も成功のまま何もしません。
+`AWS_DEPLOY_ROLE_ARN` を Secret に保存したあと、`main` への push で CI が成功すると `dev` は自動でデプロイされます。Secret が空の間は、その実行も成功のまま何もしません。同じ名前の Variable があっても使いません。
 
 `staging` / `prod`、または `dev` の再実行は、Actions の **Deploy** を `main` で手動実行します。入力は `dev` / `staging` / `prod`（既定 `dev`）です。手動実行は `AUTO_DEPLOY_DEV` の影響を受けません。
 
@@ -195,7 +208,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 
 `infra/samconfig.toml` の `confirm_changeset = true` は手元用です。ワークフローは `--no-confirm-changeset` で上書きします。
 
-実アカウントがまだ無い状態では、変数を作らずにこのリポジトリをマージして構いません。CI は AWS なしで通り（`sam validate --lint` / `sam build` を含む）、Deploy は選んでも no-op です。
+実アカウントがまだ無い状態では、Secret を作らずにこのリポジトリをマージして構いません。CI は AWS なしで通り（`sam validate --lint` / `sam build` を含む）、Deploy は選んでも no-op です。
 
 ## 初回デプロイが ROLLBACK_COMPLETE で止まったとき
 
