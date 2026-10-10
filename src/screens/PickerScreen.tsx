@@ -26,9 +26,12 @@ export function PickerScreen({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const loaded = useLoad(async () => {
-    const [exercises, recent] = await Promise.all([client.listExercises(), client.listRecentExercises()]);
+    const [exercises, recent] = await Promise.all([
+      client.listExercises(session.date),
+      client.listRecentExercises(session.date),
+    ]);
     return { exercises, recent };
-  }, [client]);
+  }, [client, session.date]);
 
   const normalized = query.trim();
   const exercises = loaded.data?.exercises ?? [];
@@ -50,7 +53,7 @@ export function PickerScreen({
       return;
     }
     try {
-      await client.touchExercise(trimmed, new Date().toISOString());
+      await client.touchExercise(trimmed, new Date().toISOString(), session.date);
       const added = session.addExercise(trimmed);
       if (added === "too_many") {
         setError(DAY_PLAN_TOO_MANY_EXERCISES);

@@ -84,7 +84,8 @@ func (d *Dynamo) Put(ctx context.Context, item ddb.DayPlanItem) error {
 }
 
 // Get returns the day's menu, or an empty plan when the item is missing.
-func Get(ctx context.Context, store Store, userID, date string, now time.Time) (model.DayPlan, error) {
+// Dates outside the write window can still be read. Put enforces the window.
+func Get(ctx context.Context, store Store, userID, date string) (model.DayPlan, error) {
 	checkedID, err := ddb.AssertUserID(userID)
 	if err != nil {
 		return model.DayPlan{}, err
@@ -92,13 +93,6 @@ func Get(ctx context.Context, store Store, userID, date string, now time.Time) (
 	checkedDate, err := ddb.AssertISODate(date)
 	if err != nil {
 		return model.DayPlan{}, err
-	}
-	writable, err := ddb.IsWritableSessionDate(checkedDate, now)
-	if err != nil {
-		return model.DayPlan{}, err
-	}
-	if !writable {
-		return model.DayPlan{}, &ddb.ItemValidationError{Code: "date_window", Msg: "date is outside the writable session window"}
 	}
 	key, err := ddb.DayPlanKey(checkedID, checkedDate)
 	if err != nil {

@@ -45,7 +45,7 @@ func TestStoredEmptyMenuStaysDistinctFromOmittedFields(t *testing.T) {
 	if err := store.Put(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Get(context.Background(), store, userID, "2026-10-02", now)
+	got, err := Get(context.Background(), store, userID, "2026-10-02")
 	if err != nil || got.Memo != "" || got.Exercises == nil || len(got.Exercises) != 0 || got.Finished {
 		t.Fatalf("empty = %#v %v", got, err)
 	}
@@ -62,10 +62,17 @@ func TestStoredEmptyMenuStaysDistinctFromOmittedFields(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = Get(context.Background(), omitted, userID, "2026-10-02", now)
+	_, err = Get(context.Background(), omitted, userID, "2026-10-02")
 	var storage *StorageError
 	var invalid *ddb.ItemValidationError
 	if !errors.As(err, &storage) || !errors.As(err, &invalid) || invalid.Code != "memo_invalid" {
 		t.Fatalf("omitted = %v", err)
+	}
+}
+
+func TestGetReadsADateOutsideTheWriteWindow(t *testing.T) {
+	got, err := Get(context.Background(), NewMemory(), userID, "2026-09-01")
+	if err != nil || got.Date != "2026-09-01" || got.Exercises == nil {
+		t.Fatalf("old date = %#v %v", got, err)
 	}
 }

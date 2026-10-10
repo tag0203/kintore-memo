@@ -6,16 +6,23 @@ export function Modal({
   body,
   cancelLabel,
   confirmLabel,
+  alternateLabel,
+  alternateDisabled = false,
   onCancel,
   onConfirm,
+  onAlternate,
 }: {
   titleId: string;
   title: string;
   body: string;
   cancelLabel: string;
   confirmLabel: string;
+  /** 破棄して切り替える、のように確認と取消のあいだの選択。 */
+  alternateLabel?: string;
+  alternateDisabled?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  onAlternate?: () => void;
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
@@ -36,10 +43,15 @@ export function Modal({
       >
         <h2 id={titleId}>{title}</h2>
         <p>{body}</p>
-        <div className="modal-actions">
+        <div className={alternateLabel ? "modal-actions is-stack" : "modal-actions"}>
           <button ref={cancelRef} type="button" className="btn secondary" onClick={onCancel}>
             {cancelLabel}
           </button>
+          {alternateLabel && onAlternate && (
+            <button type="button" className="btn secondary" onClick={onAlternate} disabled={alternateDisabled}>
+              {alternateLabel}
+            </button>
+          )}
           <button type="button" className="btn primary" onClick={onConfirm}>
             {confirmLabel}
           </button>

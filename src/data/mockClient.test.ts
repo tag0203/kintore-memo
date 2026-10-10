@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { PAGE_TITLE } from "../domain";
+import { PAGE_TITLE, tokyoCivilDate } from "../domain";
 import { createMockClient } from "./mockClient";
 import { createSeed } from "./seed";
 
-const today = new Date(2026, 8, 26);
+/** 2026-09-26 12:00 JST。端末のタイムゾーンに依存しない。 */
+const today = new Date("2026-09-26T03:00:00.000Z");
+
+describe("createSeed", () => {
+  it("uses the Tokyo civil date across the UTC midnight boundary", () => {
+    const justAfterTokyoMidnight = new Date("2026-10-02T15:30:00.000Z");
+    expect(tokyoCivilDate(justAfterTokyoMidnight)).toBe("2026-10-03");
+    const seed = createSeed(justAfterTokyoMidnight);
+    const todayLogs = seed.logs.filter((log) => log.id.startsWith("seed-curl-today"));
+    expect(todayLogs.map((log) => log.date)).toEqual(["2026-10-03", "2026-10-03"]);
+    expect(seed.logs.find((log) => log.id === "seed-squat")?.date).toBe("2026-10-02");
+  });
+});
 
 describe("mock workout client", () => {
   it("seeds the home list: previous day for squat, today already logged for leg curl", async () => {

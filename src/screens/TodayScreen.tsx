@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
+import { ChevronDownIcon, Icon } from "../components/icons";
 import { useClient } from "../clientContext";
 import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } from "../domain";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
+import { sessionDateChoices, sessionDateLabel, type SessionDateChoice } from "../sessionDate";
 
 interface PlanRow {
   name: string;
@@ -14,8 +16,8 @@ interface PlanRow {
 }
 
 /** 記録がある種目を外すときの確認文。Notion の行は残ることを明示する。 */
-export function removalConfirmBody(todayCount: number): string {
-  return `今日の記録は${todayCount}件あります。メニューから外しても、Notion に保存した記録は削除されません。`;
+export function removalConfirmBody(todayCount: number, dateLabel = "今日"): string {
+  return `${dateLabel}の記録は${todayCount}件あります。メニューから外しても、Notion に保存した記録は削除されません。`;
 }
 
 export function TodayExerciseRow({
@@ -24,6 +26,7 @@ export function TodayExerciseRow({
   previous,
   today,
   removable,
+  dateLabel = "今日",
   onOpen,
   onRemove,
 }: {
@@ -33,6 +36,8 @@ export function TodayExerciseRow({
   today: ExerciseLog[];
   /** 編集中かつ未終了のときだけ。カードの外に置き、タップ領域を分ける。 */
   removable: boolean;
+  /** 東京の今日なら「今日」。それ以外は「10/10（前日）」。 */
+  dateLabel?: string;
   onOpen: () => void;
   onRemove: () => void;
 }) {
@@ -57,7 +62,7 @@ export function TodayExerciseRow({
           )}
           {today.length > 0 && (
             <span className="exercise-today">
-              <span className="log-kicker">今日</span>
+              <span className="log-kicker">{dateLabel}</span>
               {today.map((log) => (
                 <span key={log.id} className="log-line">
                   {formatLogLine(log)}
@@ -71,7 +76,7 @@ export function TodayExerciseRow({
         </span>
       </button>
       {removable && (
-        <button type="button" className="plan-remove" aria-label={`${name}を今日のメニューから外す`} onClick={onRemove}>
+        <button type="button" className="plan-remove" aria-label={`${name}を${dateLabel}のメニューから外す`} onClick={onRemove}>
           外す
         </button>
       )}
@@ -79,13 +84,78 @@ export function TodayExerciseRow({
   );
 }
 
+export function SessionDatePicker({
+  date,
+  choices,
+  open,
+  busy = false,
+  onToggle,
+  onSelect,
+}: {
+  date: string;
+  choices: readonly SessionDateChoice[];
+  open: boolean;
+  /** 保存待ちのあいだは、別の日付を選べない。 */
+  busy?: boolean;
+  onToggle: () => void;
+  onSelect: (date: string) => void;
+}) {
+  return (
+    <div className="session-date">
+      <button
+        type="button"
+        className="today-date-btn"
+        aria-expanded={open}
+        aria-controls="session-date-choices"
+        aria-busy={busy}
+        disabled={busy}
+        onClick={onToggle}
+      >
+        <span>{formatJapaneseDate(date)}</span>
+        <Icon>
+          <ChevronDownIcon />
+        </Icon>
+      </button>
+      {open && (
+        <div id="session-date-choices" className="date-choices" role="group" aria-label="日付を選ぶ">
+          {choices.map((choice) => (
+            <button
+              key={choice.date}
+              type="button"
+              className={choice.date === date ? "date-choice is-selected" : "date-choice"}
+              aria-pressed={choice.date === date}
+              disabled={busy}
+              onClick={() => onSelect(choice.date)}
+            >
+              <span className="date-choice-label">{choice.label}</span>
+              <span className="date-choice-value">{formatJapaneseDate(choice.date)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
   const session = useSession();
+  const dateLabel = sessionDateLabel(session.date, new Date());
   const client = useClient();
   const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [dateOpen, setDateOpen] = useState(false);
+  const [dateChoices, setDateChoices] = useState<SessionDateChoice[]>([]);
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
+  // 確認を出しているあいだは未送信の自動保存を止め、閉じたら再開する。
+  useEffect(() => {
+    if (pendingDate == null) return;
+    session.pauseAutoSave();
+    return () => {
+      session.resumeAutoSave();
+    };
+  }, [pendingDate, session.pauseAutoSave, session.resumeAutoSave]);
   // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
   useEffect(() => {
     if (session.finished || session.exercises.length === 0) setEditing(false);
@@ -120,15 +190,34 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   return (
     <section className="screen">
       <div className="today-head">
-        <div>
-          <h1 className="today-title">今日のトレーニング</h1>
-          <p className="today-date">{formatJapaneseDate(session.date)}</p>
-        </div>
+        <h1 className="today-title">{dateLabel}のトレーニング</h1>
         {auth.required && auth.email && (
           <button type="button" className="text-btn" onClick={auth.signOut}>
             ログアウト
           </button>
         )}
+        <SessionDatePicker
+          date={session.date}
+          choices={dateChoices}
+          open={dateOpen}
+          busy={session.dateBusy || pendingDate !== null}
+          onToggle={() => {
+            if (session.dateBusy || pendingDate) return;
+            if (!dateOpen) setDateChoices(sessionDateChoices(new Date()));
+            setDateOpen((value) => !value);
+          }}
+          onSelect={(date) => {
+            if (session.dateBusy || pendingDate) return;
+            setDateOpen(false);
+            if (date === session.date) return;
+            if (session.hasUnsavedEdits()) {
+              session.pauseAutoSave();
+              setPendingDate(date);
+              return;
+            }
+            void session.setDate(date, "clean");
+          }}
+        />
       </div>
 
       {session.finished && (
@@ -198,6 +287,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
                   previous={previous}
                   today={today}
                   removable={editing && canEditMenu}
+                  dateLabel={dateLabel}
                   onOpen={() => navigate({ screen: "record", exercise: name })}
                   onRemove={() => askRemove(name, today.length)}
                 />
@@ -219,15 +309,39 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
             種目を追加
           </button>
           <button type="button" className="btn secondary" onClick={() => setConfirmEnd(true)}>
-            今日を終了
+            {dateLabel}を終了
           </button>
         </div>
+      )}
+
+      {pendingDate && (
+        <Modal
+          titleId="date-switch-title"
+          title="日付を切り替えますか？"
+          body="この日付の変更はまだ送られていません。"
+          cancelLabel="キャンセル"
+          alternateLabel={session.menuSaving ? "保存しています…" : "破棄して切り替える"}
+          alternateDisabled={session.menuSaving}
+          confirmLabel="送信して切り替える"
+          onCancel={() => setPendingDate(null)}
+          onAlternate={() => {
+            if (session.menuSaving) return;
+            const next = pendingDate;
+            setPendingDate(null);
+            void session.setDate(next, "discard");
+          }}
+          onConfirm={() => {
+            const next = pendingDate;
+            setPendingDate(null);
+            void session.setDate(next, "save");
+          }}
+        />
       )}
 
       {confirmEnd && (
         <Modal
           titleId="end-title"
-          title="今日のトレーニングを終了しますか？"
+          title={`${dateLabel}のトレーニングを終了しますか？`}
           body={`記録済み ${recordedCount} / ${session.exercises.length} 種目です。終了後も「再開する」で続けられます。`}
           cancelLabel="キャンセル"
           confirmLabel="終了する"
@@ -244,7 +358,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <Modal
           titleId="remove-title"
           title={`「${pendingRemove}」を外しますか？`}
-          body={removalConfirmBody(pendingTodayCount)}
+          body={removalConfirmBody(pendingTodayCount, dateLabel)}
           cancelLabel="キャンセル"
           confirmLabel="外す"
           onCancel={() => setPendingRemove(null)}

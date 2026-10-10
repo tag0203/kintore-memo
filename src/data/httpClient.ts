@@ -1,5 +1,5 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
-import { isDifficulty, toISODate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
+import { isDifficulty, tokyoCivilDate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
 import type { WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { chronological } from "./logRows";
@@ -33,7 +33,10 @@ interface SessionCache {
 export interface HttpWorkoutClientOptions {
   apiBaseUrl: string;
   getIdToken: () => Promise<string>;
-  /** listExercises が日付より先に来たときのセッション日。画面は起動日を渡す。 */
+  /**
+   * 日付を引数に取らない読み取りで、キャッシュもまだ無いときのセッション日。
+   * 端末のローカル日ではなく、東京の暦日にする。
+   */
   now?: Date;
 }
 
@@ -194,8 +197,12 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     return `/api/bootstrap?${params.toString()}`;
   }
 
-  async function pull(date: string, names: readonly string[]): Promise<void> {
+  let cacheEpoch = 0;
+
+  async function pull(date: string, names: readonly string[], epoch: number): Promise<boolean> {
     const payload = await request(bootstrapPath(date, names), { method: "GET" }, "記録の取得に失敗しました");
+    // 日付を切り替えたあとに、前の日付の応答でキャッシュを上書きしない。
+    if (epoch !== cacheEpoch) return false;
     const parsed = parseBootstrap(payload);
     if (!cache || cache.date !== date) {
       cache = { date, exercises: [], logs: new Map(), catalogReady: false };
@@ -205,24 +212,42 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     for (const name of names) {
       if (!cache.logs.has(name)) cache.logs.set(name, emptyPair());
     }
+    return true;
   }
 
   async function load(date: string, names: readonly string[]): Promise<void> {
-    if (cache && cache.date !== date) cache = null;
+    if (cache && cache.date !== date) {
+      cacheEpoch += 1;
+      cache = null;
+    }
+    const epoch = cacheEpoch;
     const missing = names.filter((name) => !cache?.logs.has(name));
+    const apply = async (chunk: readonly string[]) => {
+      const kept = await pull(date, chunk, epoch);
+      return kept;
+    };
     if (!cache?.catalogReady) {
-      if (missing.length === 0) await pull(date, []);
-      else {
-        for (const chunk of chunks(missing, BOOTSTRAP_LIMIT)) await pull(date, chunk);
+      if (missing.length === 0) {
+        if (!(await apply([]))) return;
+      } else {
+        for (const chunk of chunks(missing, BOOTSTRAP_LIMIT)) {
+          if (!(await apply(chunk))) return;
+        }
       }
+      if (epoch !== cacheEpoch) return;
       const extras = (cache?.exercises ?? [])
         .map((exercise) => exercise.name)
         .filter((name) => !cache?.logs.has(name));
-      for (const chunk of chunks(extras, BOOTSTRAP_LIMIT)) await pull(date, chunk);
-      if (cache) cache.catalogReady = true;
+      for (const chunk of chunks(extras, BOOTSTRAP_LIMIT)) {
+        if (!(await apply(chunk))) return;
+      }
+      if (epoch !== cacheEpoch || !cache) return;
+      cache.catalogReady = true;
       return;
     }
-    for (const chunk of chunks(missing, BOOTSTRAP_LIMIT)) await pull(date, chunk);
+    for (const chunk of chunks(missing, BOOTSTRAP_LIMIT)) {
+      if (!(await apply(chunk))) return;
+    }
   }
 
   async function fillPending(): Promise<void> {
@@ -294,15 +319,21 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     return [exercise];
   }
 
+  /** 明示されたセッション日 → いまのキャッシュの日 → 東京の今日。日付が違えば need がキャッシュを捨てて取り直す。 */
+  function readDate(onDate?: string): string {
+    if (onDate) return onDate;
+    return cache?.date ?? tokyoCivilDate(now);
+  }
+
   return {
-    async listExercises() {
-      const date = cache?.date ?? toISODate(now);
+    async listExercises(onDate?: string) {
+      const date = readDate(onDate);
       await need(date, []);
       return requireCache(date).exercises.map((exercise) => ({ ...exercise }));
     },
 
-    async listRecentExercises() {
-      const date = cache?.date ?? toISODate(now);
+    async listRecentExercises(onDate?: string) {
+      const date = readDate(onDate);
       await need(date, []);
       return requireCache(date)
         .exercises.filter((exercise) => exercise.lastPickedAt)
@@ -333,9 +364,9 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
       return { ...created };
     },
 
-    async touchExercise(name, atISO) {
+    async touchExercise(name, atISO, onDate?: string) {
       const exerciseName = assertCatalogName(name);
-      const date = cache?.date ?? toISODate(now);
+      const date = readDate(onDate);
       await need(date, []);
       const current = requireCache(date);
       if (!current.logs.has(exerciseName)) current.logs.set(exerciseName, emptyPair());

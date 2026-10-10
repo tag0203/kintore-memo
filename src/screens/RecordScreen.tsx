@@ -16,6 +16,7 @@ import {
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
+import { sessionDateLabel } from "../sessionDate";
 
 interface Draft {
   weight: string;
@@ -46,6 +47,7 @@ export function RecordScreen({
 }) {
   const client = useClient();
   const session = useSession();
+  const dateLabel = sessionDateLabel(session.date, new Date());
   const weightRef = useRef<HTMLInputElement>(null);
   const repsRef = useRef<HTMLInputElement>(null);
   const setsRef = useRef<HTMLInputElement>(null);
@@ -129,6 +131,7 @@ export function RecordScreen({
         <h1>{exercise}</h1>
         <span />
       </header>
+      {dateLabel !== "今日" && <p className="section-hint">{dateLabel}</p>}
 
       {loaded.status === "error" && (
         <div className="status-line">
@@ -171,7 +174,7 @@ export function RecordScreen({
           </article>
 
           <form className="today-card" onSubmit={(event) => void onSave(event)}>
-            <h2 className="card-kicker">今日</h2>
+            <h2 className="card-kicker">{dateLabel}</h2>
             {todayLogs.length > 0 && (
               <>
                 <ul className="session-rows today-saved">
@@ -190,7 +193,7 @@ export function RecordScreen({
                     </li>
                   ))}
                 </ul>
-                <p className="today-note">今日の記録は残したまま、保存でもう1行追加します。</p>
+                <p className="today-note">{dateLabel}の記録は残したまま、保存でもう1行追加します。</p>
               </>
             )}
             {draft && (

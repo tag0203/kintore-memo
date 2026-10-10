@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -245,7 +246,7 @@ func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HT
 	}
 	var result model.DayPlan
 	if method == "GET" {
-		result, err = dayplan.Get(ctx, store, userID, searchParams(event).Get("date"), h.now())
+		result, err = dayplan.Get(ctx, store, userID, searchParams(event).Get("date"))
 	} else {
 		payload, readErr := readEventJSON(event)
 		if readErr != nil {
@@ -261,6 +262,7 @@ func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HT
 		if !errors.As(err, &stored) {
 			var invalid *ddb.ItemValidationError
 			if errors.As(err, &invalid) {
+				log.Printf("day plan rejected code=%s", invalid.Code)
 				if invalid.Code == "user_id" {
 					return jsonResponse(401, map[string]string{
 						"error":   "unauthorized",

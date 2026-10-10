@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { DAY_PLAN_EXERCISE_LIMIT, DAY_PLAN_TOO_MANY_EXERCISES, type DayPlanClient } from "./data/dayPlanClient";
 import {
@@ -8,7 +8,20 @@ import {
 } from "./data/exerciseName";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
-import { toISODate } from "./domain";
+import {
+  SESSION_DATE_SAVE_FAILED,
+  menuFromDayPlan,
+  readStoredSessionDate,
+  recallMenu,
+  resolveStoredSessionDate,
+  sessionDateAfterLoad,
+  storeMenu,
+  switchSessionDate,
+  writeStoredSessionDate,
+  type DateSwitchChoice,
+  type SessionDateStorage,
+  type SessionMenu,
+} from "./sessionDate";
 
 export type AddExerciseResult = "added" | "present" | "empty" | "too_many" | "invalid" | "too_long";
 
@@ -64,8 +77,23 @@ interface Session {
   memo: string;
   exercises: string[];
   finished: boolean;
-  /** 永続化に失敗したときだけ入る。モック経路では null */
+  /** 永続化に失敗したときだけ入る。画面には短い文言だけ出す */
   saveError: string | null;
+  /** 未保存の DayPlan がある。日付を変える前に、破棄するか送るかを選ぶ。 */
+  hasUnsavedEdits: () => boolean;
+  /** 保存の通信中。このあいだ「破棄して切り替える」は押せない。 */
+  menuSaving: boolean;
+  /** 日付の確認を出しているあいだ、未送信の自動保存を止める。 */
+  pauseAutoSave: () => void;
+  /** 確認をキャンセルしたあと、残っている変更の自動保存を再開する。 */
+  resumeAutoSave: () => void;
+  /**
+   * clean: 未保存はない。save: 送れてから切り替える。discard: 送らずに切り替える。
+   * 切り替えが終わるまで dateBusy。
+   */
+  setDate: (date: string, choice: DateSwitchChoice) => Promise<void>;
+  /** 日付の保存待ち。このあいだ日付の選択は押せない。 */
+  dateBusy: boolean;
   setMemo: (memo: string) => void;
   addExercise: (name: string) => AddExerciseResult;
   /**
@@ -79,6 +107,19 @@ interface Session {
 
 const SessionContext = createContext<Session | null>(null);
 
+const defaultDateStorage: SessionDateStorage = {
+  getItem(key) {
+    try {
+      return globalThis.localStorage?.getItem(key) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    globalThis.localStorage?.setItem(key, value);
+  },
+};
+
 /** API 未設定のローカルはシード。DayPlan を読むときは空から始め、シードで上書きしない。 */
 export function initialMenu(persistDayPlan: boolean): { memo: string; exercises: string[] } {
   if (persistDayPlan) return { memo: "", exercises: [] };
@@ -88,20 +129,38 @@ export function initialMenu(persistDayPlan: boolean): { memo: string; exercises:
 export function SessionProvider({
   children,
   dayPlan = null,
+  now = () => new Date(),
+  dateStorage = defaultDateStorage,
 }: {
   children: ReactNode;
   dayPlan?: DayPlanClient | null;
+  /** テストから東京の「いま」を渡す。画面は `new Date()`。 */
+  now?: () => Date;
+  dateStorage?: SessionDateStorage;
 }) {
-  const [date] = useState(() => toISODate(new Date()));
+  const [bootDate] = useState(() => resolveStoredSessionDate(readStoredSessionDate(dateStorage), now()));
+  const [date, setDateState] = useState(bootDate);
+  const [dateBusy, setDateBusy] = useState(false);
   const seed = initialMenu(dayPlan != null);
   const [memo, setMemoState] = useState(seed.memo);
   const [exercises, setExercises] = useState<string[]>(seed.exercises);
   const [finished, setFinished] = useState(false);
+  /** DayPlan を読むあいだは null。モックは選んだ日付のメニューが state に入っている。 */
+  const [menuDate, setMenuDate] = useState<string | null>(dayPlan ? null : bootDate);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(dayPlan ? "loading" : "ready");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [menuSaving, setMenuSaving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const { registerBeforeSignOut, readSessionEpoch, required, signOut } = useAuth();
+  const dateRef = useRef(date);
+  dateRef.current = date;
+  const menuRef = useRef<SessionMenu>({ memo, exercises, finished });
+  menuRef.current = { memo, exercises, finished };
+  const localMenus = useRef(new Map<string, SessionMenu>());
+  const switching = useRef(false);
+  /** 読み込めた日付。失敗したときはここへ戻す。モックは起動時から確定している。 */
+  const confirmedDateRef = useRef<string | null>(dayPlan ? null : bootDate);
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -111,11 +170,15 @@ export function SessionProvider({
     });
   }, [dayPlan, readSessionEpoch]);
 
+  const saverRef = useRef(saver);
+  saverRef.current = saver;
+
   useEffect(() => {
     if (!saver) return;
     saver.setListeners({
       onError: (message) => setSaveError(message),
       onSaved: () => setSaveError(null),
+      onSending: (sending) => setMenuSaving(sending),
     });
   }, [saver]);
 
@@ -126,21 +189,34 @@ export function SessionProvider({
     dayPlan.load(date).then(
       (plan) => {
         if (cancelled) return;
-        const next = {
-          date,
-          memo: plan.memo,
-          exercises: [...plan.exercises],
-          finished: plan.finished,
-        };
-        saver.markSaved(next);
-        setMemoState(next.memo);
-        setExercises(next.exercises);
-        setFinished(next.finished);
+        const outcome = sessionDateAfterLoad({
+          requested: date,
+          ok: true,
+          previous: confirmedDateRef.current,
+        });
+        confirmedDateRef.current = outcome.date;
+        if (outcome.persist) writeStoredSessionDate(dateStorage, outcome.date);
+        const nextMenu = menuFromDayPlan(plan);
+        saver.markSaved({ date, ...nextMenu });
+        setMemoState(nextMenu.memo);
+        setExercises(nextMenu.exercises);
+        setFinished(nextMenu.finished);
+        setMenuDate(date);
         setSaveError(null);
         setPhase("ready");
       },
       (error: unknown) => {
         if (cancelled) return;
+        const outcome = sessionDateAfterLoad({
+          requested: date,
+          ok: false,
+          previous: confirmedDateRef.current,
+        });
+        if (outcome.date !== date) {
+          dateRef.current = outcome.date;
+          setDateState(outcome.date);
+          return;
+        }
         setLoadError(error instanceof Error ? error.message : "メニューを読み込めませんでした");
         setPhase("error");
       },
@@ -148,12 +224,85 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [attempt, date, dayPlan, saver]);
+  }, [attempt, date, dateStorage, dayPlan, saver]);
 
   useEffect(() => {
-    if (phase !== "ready" || !saver) return;
+    if (phase !== "ready" || !saver || menuDate !== date) return;
     saver.schedule({ date, memo, exercises, finished });
-  }, [phase, saver, date, memo, exercises, finished]);
+  }, [phase, saver, date, memo, exercises, finished, menuDate]);
+
+  const flushPending = useCallback(async () => {
+    const saver = saverRef.current;
+    if (!saver) return true;
+    return saver.flush();
+  }, []);
+
+  const hasUnsavedEdits = useCallback(() => saverRef.current?.dirty() ?? false, []);
+  const pauseAutoSave = useCallback(() => {
+    saverRef.current?.pause();
+  }, []);
+  const resumeAutoSave = useCallback(() => {
+    saverRef.current?.resume();
+  }, []);
+
+  const applySwitchedDate = useCallback(
+    (previous: string, next: string) => {
+      if (dayPlan) {
+        // 読み込みが終わるまで、前のメニューを新しい日付へ保存しない。
+        setMenuDate(null);
+        setPhase("loading");
+        dateRef.current = next;
+        setDateState(next);
+        return;
+      }
+      storeMenu(localMenus.current, previous, menuRef.current);
+      const restored = recallMenu(localMenus.current, next);
+      menuRef.current = restored;
+      dateRef.current = next;
+      setMemoState(restored.memo);
+      setExercises(restored.exercises);
+      setFinished(restored.finished);
+      setMenuDate(next);
+      setDateState(next);
+    },
+    [dayPlan],
+  );
+
+  const setDate = useCallback(
+    async (next: string, choice: DateSwitchChoice) => {
+      if (switching.current) return;
+      if (next === dateRef.current) return;
+      const previous = dateRef.current;
+      switching.current = true;
+      setDateBusy(true);
+      try {
+        const result = await switchSessionDate({
+          currentDate: previous,
+          nextDate: next,
+          choice,
+          flush: flushPending,
+          discard: () => saverRef.current?.dropPending(),
+          persist: (value) => {
+            // DayPlan は読み込み成功後にだけ書く。失敗しても直前の日付が残る。
+            if (dayPlan) return;
+            confirmedDateRef.current = value;
+            writeStoredSessionDate(dateStorage, value);
+          },
+        });
+        if (!result.switched) {
+          if (result.reason === "save_failed") {
+            setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
+          }
+          return;
+        }
+        applySwitchedDate(previous, result.date);
+      } finally {
+        switching.current = false;
+        setDateBusy(false);
+      }
+    },
+    [applySwitchedDate, dateStorage, dayPlan, flushPending],
+  );
 
   useEffect(() => {
     if (!saver) return;
@@ -174,17 +323,25 @@ export function SessionProvider({
 
   useEffect(() => {
     if (!saver) return;
-    return registerBeforeSignOut(() => saver.flush());
+    return registerBeforeSignOut(async () => {
+      await saver.flush();
+    });
   }, [registerBeforeSignOut, saver]);
 
   const value = useMemo<Session>(() => {
     const publish = (next: { memo: string; exercises: string[]; finished: boolean }, immediate: boolean) => {
-      if (!saver) return;
+      if (!saver || menuDate !== date) return;
       saver.schedule({ date, ...next });
       if (immediate) void saver.flush();
     };
     return {
       date,
+      hasUnsavedEdits,
+      menuSaving,
+      pauseAutoSave,
+      resumeAutoSave,
+      setDate,
+      dateBusy,
       memo,
       exercises,
       finished,
@@ -225,7 +382,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, exercises, finished, memo, saveError, saver]);
+  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, menuSaving, pauseAutoSave, resumeAutoSave, saveError, saver, setDate]);
 
   if (phase === "loading") {
     return (

@@ -9,6 +9,7 @@ import { LoginScreen } from "./screens/LoginScreen";
 import { TodayScreen } from "./screens/TodayScreen";
 import { parseHash, routeToHash, type Route } from "./route";
 import { SessionProvider, useSession } from "./session";
+import { sessionDateLabel } from "./sessionDate";
 
 function useRoute() {
   const [route, setRoute] = useState<Route>(() => parseHash(window.location.hash));
@@ -43,12 +44,13 @@ function useRoute() {
 function Shell() {
   const { route, navigate, back } = useRoute();
   const session = useSession();
+  const dateLabel = sessionDateLabel(session.date, new Date());
 
   useEffect(() => {
     if (route.screen === "picker") document.title = "種目を追加 · 筋トレメモ";
     else if (route.screen === "record") document.title = `${route.exercise} · 筋トレメモ`;
-    else document.title = "今日のトレーニング · 筋トレメモ";
-  }, [route]);
+    else document.title = `${dateLabel}のトレーニング · 筋トレメモ`;
+  }, [dateLabel, route]);
 
   return (
     <div className="app-shell">
