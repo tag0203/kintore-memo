@@ -67,7 +67,7 @@ gate の checkout は `fetch-depth: 0` でも、この run がキューに入っ
 ## ログに出さないもの
 
 - ワークフローは `set -x`、`sam --debug`、`aws --debug` を使いません。
-- ロール ARN は gate の env ダンプより前に、リポジトリ変数 API（REST の `Bearer`）で読んでマスクします。API が読めないときはデプロイを止めません。その実行の env ダンプには ARN が出ることがあります。アカウント ID は秘密ではありません。形を確認したあともマスクします。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
+- ロール ARN は形を確認したあとマスクします。runner は `add-mask` より前にステップの env を出すので、gate の env ブロックには ARN が出ます。アカウント ID は秘密ではありません。変数 API ではマスクしません。`GITHUB_TOKEN` に付与できる権限に Variables の read はなく、そのための PAT は置きません。一時クレデンシャルは `configure-aws-credentials` がマスクし、ステップ出力には出しません。
 - ジョブ開始時にアクセスキー系の環境変数があると、引き受ける前に失敗します。
 - デプロイロールは Notion 用 SSM パラメータの読み書きを明示的に拒否します。値は [aws-deploy.md](./aws-deploy.md) のとおり、手元の CLI で作ります。ワークフローはパラメータ名を解決しません。
 - `npm run check:secrets` は (1) ブラウザ側と `dist/` にトークン名・ホストが無いこと、(2) **追跡ファイル全体**に Notion トークン値（`ntn_…` / `secret_…`）が無いことを見ます。漏れていたらファイルパスとパターン名だけを出し、一致した中身は出しません。

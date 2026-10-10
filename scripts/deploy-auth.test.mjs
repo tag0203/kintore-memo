@@ -103,13 +103,14 @@ describe("deploy workflow token permissions", () => {
     ]);
   });
 
-  it("masks the role ARN before the gate step dumps its env", () => {
-    const maskAt = workflow.indexOf('echo "::add-mask::${ARN}"');
-    const envAt = workflow.indexOf("AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}");
-    expect(maskAt).toBeGreaterThan(0);
-    expect(envAt).toBeGreaterThan(maskAt);
-    expect(workflow).toContain("node scripts/actions-variable.mjs AWS_DEPLOY_ROLE_ARN");
-    const maskStep = workflow.slice(workflow.indexOf("Mask the deploy role ARN"), envAt);
-    expect(maskStep).not.toMatch(/echo "\$(\{)?ARN(\})?"/);
+  it("masks the role ARN in the gate script and does not read it from the variables API", () => {
+    expect(workflow).not.toContain("actions/variables");
+    expect(workflow).not.toContain("actions-variable.mjs");
+    const shapeAt = workflow.indexOf(
+      'if ! [[ "${AWS_DEPLOY_ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]]; then',
+    );
+    const maskAt = workflow.indexOf('echo "::add-mask::${AWS_DEPLOY_ROLE_ARN}"');
+    expect(shapeAt).toBeGreaterThan(0);
+    expect(maskAt).toBeGreaterThan(shapeAt);
   });
 });
