@@ -29,4 +29,20 @@ describe("GitHub OIDC bootstrap", () => {
     expect(template).toContain("DenyNotionParameterAccess");
     expect(template).toContain("DenyAccessKeys");
   });
+
+  it("allows HTTP API stage tagging on this region's /apis ARN only", () => {
+    const policy = template.slice(
+      template.indexOf("HttpApiStageTagPolicy:"),
+      template.indexOf("Outputs:"),
+    );
+    expect(policy).toContain("PolicyName: HttpApiStageTags");
+    expect(policy).toContain("Roles:\n        - !Ref GitHubDeployRole");
+    expect(policy).toContain("apigateway:TagResource");
+    expect(policy).toContain("apigateway:UntagResource");
+    expect(policy).toContain("arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis");
+    expect(policy).toContain("arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*");
+    expect(policy).not.toContain("/tags/");
+    expect(policy).not.toContain('Resource: "*"');
+    expect(policy).toContain("W3037");
+  });
 });

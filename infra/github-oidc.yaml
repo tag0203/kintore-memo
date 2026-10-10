@@ -422,6 +422,34 @@ Resources:
         - Key: Purpose
           Value: github-actions-oidc
 
+  # Stage create calls apigateway:TagResource on arn:...:apigateway:region::/apis/{apiId}/stages.
+  # Verb actions do not cover it. UntagResource is the update pair.
+  # Kept off the inline role policy so cfn-lint 1.57.1 (W3037) still checks every other
+  # action. That release's apigateway catalog omits these two names; the failed deploy
+  # (run 38000076207) showed IAM enforcing apigateway:TagResource.
+  HttpApiStageTagPolicy:
+    Type: AWS::IAM::Policy
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - W3037
+    Properties:
+      PolicyName: HttpApiStageTags
+      Roles:
+        - !Ref GitHubDeployRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: HttpApiStageTags
+            Effect: Allow
+            Action:
+              - apigateway:TagResource
+              - apigateway:UntagResource
+            Resource:
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis
+              - !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis/*
+
 Outputs:
   DeployRoleArn:
     Description: GitHub Actions variable AWS_DEPLOY_ROLE_ARN. Do not commit the value.
