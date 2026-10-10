@@ -113,4 +113,63 @@ describe("deploy workflow token permissions", () => {
     expect(shapeAt).toBeGreaterThan(0);
     expect(maskAt).toBeGreaterThan(shapeAt);
   });
+
+  it("reads the deploy role ARN from the secret and not from vars", () => {
+    expect(workflow).not.toMatch(/vars\.AWS_DEPLOY_ROLE_ARN/);
+    expect(workflow).not.toMatch(/secrets\.AWS_DEPLOY_ROLE_ARN\s*\|\|/);
+    expect(workflow).toContain("AWS_DEPLOY_ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}");
+    expect(workflow.match(/role-to-assume: \$\{\{ secrets\.AWS_DEPLOY_ROLE_ARN \}\}/g)).toHaveLength(2);
+    expect(workflow).toContain("AUTO_DEPLOY_DEV: ${{ vars.AUTO_DEPLOY_DEV }}");
+
+    const gate = jobBlock("gate");
+    const trustAt = gate.indexOf("scripts/ci-workflow-run.mjs");
+    const emptyAt = gate.indexOf('if [ -z "${AWS_DEPLOY_ROLE_ARN}" ]');
+    const shapeAt = gate.indexOf(
+      'if ! [[ "${AWS_DEPLOY_ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_-]+$ ]]; then',
+    );
+    const refAt = gate.indexOf('if [ "${GITHUB_REF}" != "refs/heads/main" ]');
+    const planAt = gate.indexOf("scripts/auto-deploy-plan.mjs");
+    expect(trustAt).toBeGreaterThan(0);
+    expect(emptyAt).toBeGreaterThan(trustAt);
+    expect(shapeAt).toBeGreaterThan(emptyAt);
+    expect(refAt).toBeGreaterThan(shapeAt);
+    expect(planAt).toBeGreaterThan(refAt);
+    expect(gate).toContain("AWS_DEPLOY_ROLE_ARN secret is unset");
+  });
+
+  it("suppresses sam deploy stack outputs and masks ids fetched with describe-stacks", () => {
+    const samStep = workflow.slice(
+      workflow.indexOf("      - name: sam deploy\n"),
+      workflow.indexOf("      - name: Export public stack outputs for SPA build\n"),
+    );
+    expect(samStep).toContain("set -euo pipefail");
+    expect(samStep.indexOf("filter-sam-deploy-log.mjs")).toBeGreaterThan(samStep.indexOf("set -euo pipefail"));
+    expect(samStep).toContain(
+      '2>&1 | node "${GITHUB_WORKSPACE}/scripts/filter-sam-deploy-log.mjs"',
+    );
+    expect(samStep).not.toContain("--debug");
+
+    const exportStep = workflow.slice(
+      workflow.indexOf("      - name: Export public stack outputs for SPA build\n"),
+      workflow.indexOf("      - name: Upload SPA publish inputs\n"),
+    );
+    expect(exportStep).toContain("aws cloudformation describe-stacks");
+    const maskBucketAt = exportStep.indexOf('echo "::add-mask::${SPA_BUCKET}"');
+    const maskDistAt = exportStep.indexOf('echo "::add-mask::${DIST_ID}"');
+    const fileAt = exportStep.indexOf("} > /tmp/spa-publish/env.txt");
+    expect(maskBucketAt).toBeGreaterThan(0);
+    expect(maskDistAt).toBeGreaterThan(0);
+    expect(fileAt).toBeGreaterThan(maskBucketAt);
+    expect(fileAt).toBeGreaterThan(maskDistAt);
+
+    const publishStep = workflow.slice(workflow.indexOf("      - name: Publish SPA\n"));
+    const maskPublishBucketAt = publishStep.indexOf('echo "::add-mask::${SPA_BUCKET}"');
+    const maskPublishDistAt = publishStep.indexOf('echo "::add-mask::${CLOUDFRONT_DISTRIBUTION_ID}"');
+    const syncAt = publishStep.indexOf("aws s3 sync");
+    expect(maskPublishBucketAt).toBeGreaterThan(0);
+    expect(maskPublishDistAt).toBeGreaterThan(0);
+    expect(syncAt).toBeGreaterThan(maskPublishBucketAt);
+    expect(syncAt).toBeGreaterThan(maskPublishDistAt);
+    expect(workflow).not.toContain("cat /tmp/spa-publish/env.txt");
+  });
 });

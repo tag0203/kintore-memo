@@ -138,7 +138,7 @@ Notion の列名と型は README の「Notion の形」が正です。実デー�
 | Notion トークン、データベース ID | SSM Parameter Store の SecureString。読むのは Lambda だけ。名前と IAM は SAM。値は CLI で作成（CFN は SecureString 非対応） |
 | Cognito のクライアント ID、API のベース URL | ブラウザに出てよい。秘密ではない |
 | ローカルの控え | `.env`（gitignore 済み）。コミットしない |
-| Actions から AWS へのデプロイ | OIDC ロール ARN をリポジトリ変数 `AWS_DEPLOY_ROLE_ARN` に置く。アクセスキーは Secrets に置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
+| Actions から AWS へのデプロイ | OIDC ロール ARN をリポジトリ Secret `AWS_DEPLOY_ROLE_ARN` に置く。アクセスキーは Secrets に置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
 Lambda の IAM は、そのパラメータの `GetParameter` と、そのテーブル、自分のロググループに限定し、PermissionsBoundary（`kintore-memo-api-permissions-boundary`）で上限を固定します。`npm run check:secrets` は、ブラウザ側と `dist/` に加え、追跡ファイル全体のトークン値漏れも確認します。
 
