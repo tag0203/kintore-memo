@@ -180,6 +180,41 @@ describe("createDayPlanSaver", () => {
     expect(saver.saving()).toBe(false);
   });
 
+  it("sends the reverted menu after an in-flight newer snapshot is stored", async () => {
+    let release: () => void = () => {
+      throw new Error("save did not start");
+    };
+    const save = vi.fn(async (input: DayPlanInput) => {
+      if (input.memo === "Y") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      }
+    });
+    const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.markSaved(plan("X"));
+    saver.schedule(plan("Y"));
+    const savingY = saver.flush();
+    await Promise.resolve();
+    expect(saver.saving()).toBe(true);
+    saver.schedule(plan("X"));
+    expect(saver.dirty()).toBe(true);
+    const switching = saver.flush();
+    let switchingSettled = false;
+    void switching.then(() => {
+      switchingSettled = true;
+    });
+    await Promise.resolve();
+    expect(switchingSettled).toBe(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    release();
+    await expect(savingY).resolves.toBe(true);
+    await expect(switching).resolves.toBe(true);
+    expect(save.mock.calls.map((call) => call[0].memo)).toEqual(["Y", "X"]);
+    expect(saver.dirty()).toBe(false);
+    expect(saver.saving()).toBe(false);
+  });
+
   it("drops an unsaved snapshot without sending it again", async () => {
     const save = vi.fn(async () => {
       throw new DayPlanRequestError("その日付のメニューは保存できません", 400, "date_window");

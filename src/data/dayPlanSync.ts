@@ -49,6 +49,8 @@ export function createDayPlanSaver(
   }
 
   function isCurrentSaved(): boolean {
+    // 送信中は、画面が戻っていても保存済みにしない。成功結果がまだ反映されていない。
+    if (inflight > 0) return false;
     return latest == null || fingerprint(latest) === savedKey;
   }
 
@@ -61,10 +63,9 @@ export function createDayPlanSaver(
     setSending(inflight + 1);
     try {
       await save(input);
-      if (latest && fingerprint(latest) === key) {
-        savedKey = key;
-        listeners.onSaved?.();
-      }
+      // サーバーに載ったスナップショットを記録する。画面が X に戻っていても、Y の成功を捨てると X を保存済みと誤る。
+      savedKey = key;
+      if (latest && fingerprint(latest) === key) listeners.onSaved?.();
       return true;
     } catch (error) {
       if (latest && fingerprint(latest) === key) {
@@ -124,9 +125,9 @@ export function createDayPlanSaver(
       }
     },
     flush,
-    /** まだ送っていない変更がある。 */
+    /** まだサーバーと一致していない。送信中も未保存。 */
     dirty() {
-      return latest != null && fingerprint(latest) !== savedKey;
+      return inflight > 0 || (latest != null && fingerprint(latest) !== savedKey);
     },
     /** 保存の通信中。このあいだ破棄しても、送信中のリクエストは前の日付へ届く。 */
     saving() {
