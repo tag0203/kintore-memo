@@ -367,6 +367,19 @@ Resources:
                   - logs:PutResourcePolicy
                   - logs:DescribeResourcePolicies
                 Resource: "*"
+              # Activating access logs also calls these (AWS HTTP API logging permissions).
+              # DescribeLogStreams and FilterLogEvents apply to the log group.
+              # GetLogEvents applies to log streams, so the :* ARN is included.
+              # Not granted on "*" and not on the Lambda log groups.
+              - Sid: ReadHttpApiAccessLogGroup
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:FilterLogEvents
+                  - logs:GetLogEvents
+                Resource:
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http:*
               - Sid: HttpApi
                 Effect: Allow
                 Action:

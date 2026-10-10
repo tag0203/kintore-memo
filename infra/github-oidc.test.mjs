@@ -58,7 +58,7 @@ describe("GitHub OIDC bootstrap", () => {
 
     const delivery = template.slice(
       template.indexOf("Sid: HttpApiAccessLogDelivery"),
-      template.indexOf("Sid: HttpApi\n"),
+      template.indexOf("Sid: ReadHttpApiAccessLogGroup"),
     );
     for (const action of [
       "logs:CreateLogDelivery",
@@ -81,6 +81,18 @@ describe("GitHub OIDC bootstrap", () => {
     ]) {
       expect(delivery).not.toContain(action);
     }
+
+    const readLogs = template.slice(
+      template.indexOf("Sid: ReadHttpApiAccessLogGroup"),
+      template.indexOf("Sid: HttpApi\n"),
+    );
+    for (const action of ["logs:DescribeLogStreams", "logs:FilterLogEvents", "logs:GetLogEvents"]) {
+      expect(readLogs).toContain(action);
+    }
+    expect(readLogs).toContain("log-group:/aws/apigateway/kintore-memo-*-http");
+    expect(readLogs).toContain("log-group:/aws/apigateway/kintore-memo-*-http:*");
+    expect(readLogs).not.toContain('Resource: "*"');
+    expect(readLogs).not.toContain("/aws/lambda/");
   });
 
   it("keeps stage updates, including access log settings, on the existing /apis verbs", () => {

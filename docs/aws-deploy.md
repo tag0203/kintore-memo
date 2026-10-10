@@ -145,15 +145,25 @@ curl -sS "${API_URL}/api/health"
 
 パラメータ `ReservedConcurrency` が `0` または空のとき、Lambda の `ReservedConcurrentExecutions` はテンプレートに出しません（`AWS::NoValue`）。`2` / `3` / `4` / `5` のときだけ、その数を予約します。
 
-既定を未設定にした理由は、新規アカウントでは予約するとデプロイが失敗することがあるためです。2026-10 の project サインアップで作ったアカウントのように、Lambda のアカウント同時実行クォータが 10 のことがあります。予約数 N を付けると、未予約枠は「アカウント上限 − N」です。AWS は未予約が 10 未満になる予約を拒否します。上限が 10 のときに 2 を予約すると未予約は 8 になり、`UnreservedConcurrentExecution below its minimum value of [10]` でスタック更新が失敗します。失敗する値は既定にできません。スロットリングは予約が無くても効きます。
+既定を未設定にした理由は、新規アカウントでは予約するとデプロイが失敗することがあるためです。2026-10 の project サインアップで作ったアカウントのように、Lambda のアカウント同時実行クォータが 10 のことがあります。AWS は未予約同時実行を 10 未満にする予約を拒否します。未予約はアカウント上限そのものではなく、他の関数がすでに予約した分を引いた残りです。上限が 10 で他に予約が無いとき、2 を予約すると未予約は 8 になり、`UnreservedConcurrentExecution below its minimum value of [10]` でスタック更新が失敗します。失敗する値は既定にできません。スロットリングは予約が無くても効きます。
 
-有効にする前に、同じリージョンで上限を確認します。
+有効にする前に、同じリージョンで未予約枠を確認します。
 
 ```bash
 aws lambda get-account-settings --region ap-northeast-1
 ```
 
-`AccountLimit.ConcurrentExecutions` を見ます。N（2〜5）を予約してよいのは、`ConcurrentExecutions - N` が 10 以上のときだけです。上限が 10 なら、Service Quotas で Lambda の Concurrent executions を上げてからにします。
+見るのは `AccountLimit.UnreservedConcurrentExecutions` です。`ConcurrentExecutions`（アカウント合計）から引くだけでは、他の関数の予約を見落とします。
+
+この関数に今予約が無いとき（既定）、N（2〜5）を付けてよいのは `UnreservedConcurrentExecutions - N` が 10 以上のときだけです。すでにこの関数が R を予約しているときは、付け替えで R が未予約へ戻ってから N を取るので、`UnreservedConcurrentExecutions + R - N` が 10 以上であることを確認します。R は次で見ます。予約が無いと `ReservedConcurrentExecutions` は返らず、そのときは R は 0 です。
+
+```bash
+aws lambda get-function-concurrency \
+  --function-name kintore-memo-dev-api \
+  --region ap-northeast-1
+```
+
+`staging` / `prod` は関数名の `dev` をその環境に置き換えます。未予約が足りないときは、Service Quotas で Lambda の Concurrent executions を上げてからにします。
 
 ワークフロー `.github/workflows/deploy.yml` と手元用 `infra/samconfig.toml` は `ReservedConcurrency=0` を渡します。上げるときは両方の `0` を `2`〜`5` に変えます。デプロイロールには `lambda:PutFunctionConcurrency` と `lambda:DeleteFunctionConcurrency` を付けてあります。値を変えるだけなら、OIDC スタックの再適用は要りません。自動デプロイは `0` を明示するので、手元の `sam deploy` だけで上げても、次の `dev` デプロイで未設定に戻ります。残すならワークフローの値を変えてマージします。
 

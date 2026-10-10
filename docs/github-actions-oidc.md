@@ -170,13 +170,13 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 | IAM | ロール `kintore-memo-*-api` の作成・更新は **PermissionsBoundary `kintore-memo-api-permissions-boundary` 付きに限定**。境界の削除は拒否。`iam:PassRole` は `lambda.amazonaws.com` だけ。API Gateway のサービスリンクロールを一度だけ作る権限 |
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
 | HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージの `AccessLogSettings` 更新もこの `PATCH` / `PUT` に含まれる。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
-| アクセスログの配信 | `logs:CreateLogDelivery` / `GetLogDelivery` / `UpdateLogDelivery` / `DeleteLogDelivery` / `ListLogDeliveries` / `PutResourcePolicy` / `DescribeResourcePolicies`。これらはリソースタイプが無く、`PutResourcePolicy` と `DescribeResourcePolicies` は単一ロググループの ARN では権限にならないので `*`。ログイベントの読み取り（`GetLogEvents` / `FilterLogEvents`）は付けない |
+| アクセスログの配信 | `logs:CreateLogDelivery` / `GetLogDelivery` / `UpdateLogDelivery` / `DeleteLogDelivery` / `ListLogDeliveries` / `PutResourcePolicy` / `DescribeResourcePolicies`。これらはリソースタイプが無く、`PutResourcePolicy` と `DescribeResourcePolicies` は単一ロググループの ARN では権限にならないので `*`。有効化に必要な `logs:DescribeLogStreams` / `FilterLogEvents` / `GetLogEvents` はアクセスロググループ `/aws/apigateway/kintore-memo-*-http`（`GetLogEvents` 用に `:log-stream` 側の `:*` も）だけ。Lambda のロググループと `*` には付けない |
 | Cognito | `CreateUserPool` はリソースを指定できないため `*`。ほかは user pool |
 | CloudFront | ディストリビューションの作成は `*`。タグ付き作成 API は `CreateDistribution` と `TagResource`（作成時は id が無いので `*`）。取得・更新・無効化はアカウント内の distribution。OAC は origin access control |
 
 意図的に外しているもの:
 
-- アクセスログの中身を読む権限（`logs:GetLogEvents` / `logs:FilterLogEvents`）。配信の設定だけを許す
+- Lambda ロググループに対する `logs:DescribeLogStreams` / `GetLogEvents` / `FilterLogEvents`。HTTP API のアクセスログを有効にするとき AWS がこの 3 つを要求するので、アクセスロググループにだけ付ける
 - Lambda 実行ロールの PermissionsBoundary の拡大。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、実行中の Lambda の権限ではない
 - アクセスキーの作成（明示的に拒否）
 - Notion 用 SSM（`/kintore-memo/*/notion/*`）の読み書き（明示的に拒否）。ただし境界導入後も、正当な API ロール経由の Notion 読取は Lambda コード変更で間接利用され得る。デプロイ担当が SSM を直接読めないことと、Lambda が読めないことは別

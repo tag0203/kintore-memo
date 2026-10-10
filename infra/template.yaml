@@ -33,7 +33,9 @@ Parameters:
     Description: >
       Reserved concurrent executions for the API Lambda. 0 or empty leaves the
       property unset. 2-5 reserves that many. Do not set 2-5 until
-      aws lambda get-account-settings shows ConcurrentExecutions - N >= 10.
+      aws lambda get-account-settings shows UnreservedConcurrentExecutions
+      can spare N and still leave at least 10 (add back this function's current
+      reservation first). See docs/aws-deploy.md.
 
 Conditions:
   HasReservedConcurrency: !Not

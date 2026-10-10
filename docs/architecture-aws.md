@@ -92,7 +92,7 @@ flowchart TB
 | ACM | CloudFront 用証明書。DNS 検証は Cloudflare |
 | GitHub Actions + OIDC | CI は毎回。`main` の CI 成功後に `dev` へ自動デプロイし、`staging` / `prod` は手動。長期のアクセスキーは置かない。手順は [github-actions-oidc.md](./github-actions-oidc.md) |
 
-HTTP API は全ルートを持続 10 rps、バースト 20 でスロットリングします。Lambda の予約同時実行は既定で付けません。新規アカウントは同時実行クォータが 10 のことがあり、予約すると未予約が 10 未満になってデプロイが失敗するためです。確認と有効化は [aws-deploy.md](./aws-deploy.md) です。
+HTTP API は全ルートを持続 10 rps、バースト 20 でスロットリングします。Lambda の予約同時実行は既定で付けません。新規アカウントは同時実行クォータが 10 のことがあり、他の関数の予約を引いた未予約枠が 10 未満になるとデプロイが失敗するためです。確認と有効化は [aws-deploy.md](./aws-deploy.md) です。
 
 IaC は **AWS SAM** に決めました（`infra/template.yaml`）。CDK にはしていません。コンソールだけで作ったリソースは残しません。手順は [aws-deploy.md](./aws-deploy.md) です。
 
