@@ -306,10 +306,12 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           title="日付を切り替えますか？"
           body="この日付の変更はまだ送られていません。"
           cancelLabel="キャンセル"
-          alternateLabel="破棄して切り替える"
+          alternateLabel={session.menuSaving ? "保存しています…" : "破棄して切り替える"}
+          alternateDisabled={session.menuSaving}
           confirmLabel="送信して切り替える"
           onCancel={() => setPendingDate(null)}
           onAlternate={() => {
+            if (session.menuSaving) return;
             const next = pendingDate;
             setPendingDate(null);
             void session.setDate(next, "discard");

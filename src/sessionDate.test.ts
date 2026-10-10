@@ -8,6 +8,7 @@ import {
   readStoredSessionDate,
   recallMenu,
   resolveStoredSessionDate,
+  sessionDateAfterLoad,
   sessionDateChoices,
   storeMenu,
   switchSessionDate,
@@ -195,6 +196,29 @@ describe("switchSessionDate", () => {
     expect(persist).not.toHaveBeenCalled();
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(pending);
+  });
+});
+
+describe("sessionDateAfterLoad", () => {
+  it("persists a date only after it loads", () => {
+    expect(sessionDateAfterLoad({ requested: "2026-10-03", ok: true, previous: "2026-10-02" })).toEqual({
+      date: "2026-10-03",
+      persist: true,
+    });
+  });
+
+  it("returns to the previous date when the new one fails to load", () => {
+    expect(sessionDateAfterLoad({ requested: "2026-10-03", ok: false, previous: "2026-10-02" })).toEqual({
+      date: "2026-10-02",
+      persist: false,
+    });
+  });
+
+  it("keeps the requested date when nothing has loaded yet", () => {
+    expect(sessionDateAfterLoad({ requested: "2026-10-03", ok: false, previous: null })).toEqual({
+      date: "2026-10-03",
+      persist: false,
+    });
   });
 });
 

@@ -14,6 +14,7 @@ import {
   readStoredSessionDate,
   recallMenu,
   resolveStoredSessionDate,
+  sessionDateAfterLoad,
   storeMenu,
   switchSessionDate,
   writeStoredSessionDate,
@@ -80,6 +81,8 @@ interface Session {
   saveError: string | null;
   /** 未保存の DayPlan がある。日付を変える前に、破棄するか送るかを選ぶ。 */
   hasUnsavedEdits: () => boolean;
+  /** 保存の通信中。このあいだ「破棄して切り替える」は押せない。 */
+  menuSaving: boolean;
   /**
    * clean: 未保存はない。save: 送れてから切り替える。discard: 送らずに切り替える。
    * 切り替えが終わるまで dateBusy。
@@ -143,6 +146,7 @@ export function SessionProvider({
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(dayPlan ? "loading" : "ready");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [menuSaving, setMenuSaving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const { registerBeforeSignOut, readSessionEpoch, required, signOut } = useAuth();
   const dateRef = useRef(date);
@@ -151,6 +155,8 @@ export function SessionProvider({
   menuRef.current = { memo, exercises, finished };
   const localMenus = useRef(new Map<string, SessionMenu>());
   const switching = useRef(false);
+  /** 読み込めた日付。失敗したときはここへ戻す。モックは起動時から確定している。 */
+  const confirmedDateRef = useRef<string | null>(dayPlan ? null : bootDate);
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -168,6 +174,7 @@ export function SessionProvider({
     saver.setListeners({
       onError: (message) => setSaveError(message),
       onSaved: () => setSaveError(null),
+      onSending: (sending) => setMenuSaving(sending),
     });
   }, [saver]);
 
@@ -178,6 +185,13 @@ export function SessionProvider({
     dayPlan.load(date).then(
       (plan) => {
         if (cancelled) return;
+        const outcome = sessionDateAfterLoad({
+          requested: date,
+          ok: true,
+          previous: confirmedDateRef.current,
+        });
+        confirmedDateRef.current = outcome.date;
+        if (outcome.persist) writeStoredSessionDate(dateStorage, outcome.date);
         const nextMenu = menuFromDayPlan(plan);
         saver.markSaved({ date, ...nextMenu });
         setMemoState(nextMenu.memo);
@@ -189,6 +203,16 @@ export function SessionProvider({
       },
       (error: unknown) => {
         if (cancelled) return;
+        const outcome = sessionDateAfterLoad({
+          requested: date,
+          ok: false,
+          previous: confirmedDateRef.current,
+        });
+        if (outcome.date !== date) {
+          dateRef.current = outcome.date;
+          setDateState(outcome.date);
+          return;
+        }
         setLoadError(error instanceof Error ? error.message : "メニューを読み込めませんでした");
         setPhase("error");
       },
@@ -196,7 +220,7 @@ export function SessionProvider({
     return () => {
       cancelled = true;
     };
-  }, [attempt, date, dayPlan, saver]);
+  }, [attempt, date, dateStorage, dayPlan, saver]);
 
   useEffect(() => {
     if (phase !== "ready" || !saver || menuDate !== date) return;
@@ -248,7 +272,12 @@ export function SessionProvider({
           choice,
           flush: flushPending,
           discard: () => saverRef.current?.dropPending(),
-          persist: (value) => writeStoredSessionDate(dateStorage, value),
+          persist: (value) => {
+            // DayPlan は読み込み成功後にだけ書く。失敗しても直前の日付が残る。
+            if (dayPlan) return;
+            confirmedDateRef.current = value;
+            writeStoredSessionDate(dateStorage, value);
+          },
         });
         if (!result.switched) {
           if (result.reason === "save_failed") {
@@ -262,7 +291,7 @@ export function SessionProvider({
         setDateBusy(false);
       }
     },
-    [applySwitchedDate, dateStorage, flushPending],
+    [applySwitchedDate, dateStorage, dayPlan, flushPending],
   );
 
   useEffect(() => {
@@ -298,6 +327,7 @@ export function SessionProvider({
     return {
       date,
       hasUnsavedEdits,
+      menuSaving,
       setDate,
       dateBusy,
       memo,
@@ -340,7 +370,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, saveError, saver, setDate]);
+  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, menuSaving, saveError, saver, setDate]);
 
   if (phase === "loading") {
     return (

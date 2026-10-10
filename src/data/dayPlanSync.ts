@@ -7,6 +7,8 @@ export const DAY_PLAN_SAVE_WAIT_MS = 400;
 interface DayPlanSaverListeners {
   onError?: (message: string) => void;
   onSaved?: () => void;
+  /** 保存の通信が始まった・終わった。true のあいだは破棄できない。 */
+  onSending?: (sending: boolean) => void;
 }
 
 function fingerprint(input: DayPlanInput): string {
@@ -38,7 +40,13 @@ export function createDayPlanSaver(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: DayPlanInput | null = null;
   let savedKey = "";
+  let inflight = 0;
   let chain: Promise<boolean> = Promise.resolve(true);
+
+  function setSending(next: number) {
+    inflight = next;
+    listeners.onSending?.(inflight > 0);
+  }
 
   function isCurrentSaved(): boolean {
     return latest == null || fingerprint(latest) === savedKey;
@@ -50,6 +58,7 @@ export function createDayPlanSaver(
     if (!input || fingerprint(input) === savedKey) return true;
     const key = fingerprint(input);
     if (!allowWrite()) return false;
+    setSending(inflight + 1);
     try {
       await save(input);
       if (latest && fingerprint(latest) === key) {
@@ -64,6 +73,8 @@ export function createDayPlanSaver(
         listeners.onError?.(DAY_PLAN_SAVE_ERROR);
       }
       return false;
+    } finally {
+      setSending(inflight - 1);
     }
   }
 
@@ -116,6 +127,10 @@ export function createDayPlanSaver(
     /** まだ送っていない変更がある。 */
     dirty() {
       return latest != null && fingerprint(latest) !== savedKey;
+    },
+    /** 保存の通信中。このあいだ破棄しても、送信中のリクエストは前の日付へ届く。 */
+    saving() {
+      return inflight > 0;
     },
     /** 未送信の変更を捨てる。送らずに日付を変えるとき。 */
     dropPending() {

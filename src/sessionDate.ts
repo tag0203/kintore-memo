@@ -77,6 +77,21 @@ export function writeStoredSessionDate(storage: SessionDateStorage, date: string
   }
 }
 
+/**
+ * 読み込めた日付だけ保存する。失敗して直前の日付があれば、そこへ戻し、保存はしない。
+ */
+export function sessionDateAfterLoad(input: {
+  requested: string;
+  ok: boolean;
+  previous: string | null;
+}): { date: string; persist: boolean } {
+  if (input.ok) return { date: input.requested, persist: true };
+  if (input.previous != null && input.previous !== input.requested) {
+    return { date: input.previous, persist: false };
+  }
+  return { date: input.requested, persist: false };
+}
+
 export type DateSwitchChoice = "clean" | "save" | "discard";
 
 export type SessionDateSwitch =

@@ -141,6 +141,45 @@ describe("createDayPlanSaver", () => {
     expect(saver.dirty()).toBe(false);
   });
 
+  it("stays saving until the in-flight request finishes, even if the edit is dropped", async () => {
+    const sending: boolean[] = [];
+    let release: () => void = () => {
+      throw new Error("save did not start");
+    };
+    const save = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        release = () => resolve();
+      });
+    });
+    const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.setListeners({ onSending: (value) => sending.push(value) });
+    saver.markSaved(plan(""));
+    saver.schedule(plan("脚"));
+    expect(saver.saving()).toBe(false);
+    const pending = saver.flush();
+    await Promise.resolve();
+    expect(saver.saving()).toBe(true);
+    saver.dropPending();
+    expect(saver.saving()).toBe(true);
+    release();
+    await pending;
+    expect(saver.saving()).toBe(false);
+    expect(sending).toEqual([true, false]);
+    expect(save).toHaveBeenCalledWith(plan("脚"));
+  });
+
+  it("is not saving during the debounce wait, so an unsent edit can be dropped", async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {});
+    const saver = createDayPlanSaver(save, { waitMs: 400 });
+    saver.schedule(plan("脚"));
+    expect(saver.saving()).toBe(false);
+    saver.dropPending();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(save).not.toHaveBeenCalled();
+    expect(saver.saving()).toBe(false);
+  });
+
   it("drops an unsaved snapshot without sending it again", async () => {
     const save = vi.fn(async () => {
       throw new DayPlanRequestError("その日付のメニューは保存できません", 400, "date_window");

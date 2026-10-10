@@ -7,6 +7,7 @@ export function Modal({
   cancelLabel,
   confirmLabel,
   alternateLabel,
+  alternateDisabled = false,
   onCancel,
   onConfirm,
   onAlternate,
@@ -18,6 +19,7 @@ export function Modal({
   confirmLabel: string;
   /** 破棄して切り替える、のように確認と取消のあいだの選択。 */
   alternateLabel?: string;
+  alternateDisabled?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
   onAlternate?: () => void;
@@ -46,7 +48,7 @@ export function Modal({
             {cancelLabel}
           </button>
           {alternateLabel && onAlternate && (
-            <button type="button" className="btn secondary" onClick={onAlternate}>
+            <button type="button" className="btn secondary" onClick={onAlternate} disabled={alternateDisabled}>
               {alternateLabel}
             </button>
           )}

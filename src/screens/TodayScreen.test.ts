@@ -117,7 +117,28 @@ describe("date switch choice", () => {
     expect(html).toContain("破棄して切り替える");
     expect(html).toContain("送信して切り替える");
     expect(html).toContain("キャンセル");
+    expect(html).not.toContain("disabled");
     expect(html).not.toContain("<style");
+  });
+
+  it("disables discard while a save request is in flight", () => {
+    const html = renderToStaticMarkup(
+      createElement(Modal, {
+        titleId: "date-switch-title",
+        title: "日付を切り替えますか？",
+        body: "この日付の変更はまだ送られていません。",
+        cancelLabel: "キャンセル",
+        alternateLabel: "保存しています…",
+        alternateDisabled: true,
+        confirmLabel: "送信して切り替える",
+        onCancel: vi.fn(),
+        onAlternate: vi.fn(),
+        onConfirm: vi.fn(),
+      }),
+    );
+    expect(html).toContain("保存しています…");
+    expect(html).toContain('disabled=""');
+    expect(html).not.toContain("破棄して切り替える");
   });
 });
 
