@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ExerciseLog } from "../domain";
-import { SESSION_DATE_OUT_OF_RANGE_NOTICE } from "../sessionDate";
+import { formatJapaneseDate } from "../domain";
+import { SESSION_DATE_NOT_SELECTABLE, SESSION_DATE_OUT_OF_RANGE_NOTICE, tokyoTodayAdvance } from "../sessionDate";
 import { SessionDatePicker, TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
@@ -101,6 +102,25 @@ describe("SessionDatePicker", () => {
     expect(html).toContain(SESSION_DATE_OUT_OF_RANGE_NOTICE);
     expect(html).toContain("閉じる");
     expect(html).not.toContain('class="date-choices"');
+  });
+
+  it("redraws choices from the new Tokyo today while the selected date stays in range", () => {
+    const advanced = tokyoTodayAdvance("2026-10-02", new Date("2026-10-02T15:30:00.000Z"));
+    const html = renderToStaticMarkup(
+      createElement(SessionDatePicker, {
+        date: "2026-10-02",
+        choices: advanced.choices,
+        open: true,
+        notice: SESSION_DATE_NOT_SELECTABLE,
+        onToggle: vi.fn(),
+        onSelect: vi.fn(),
+        onDismissNotice: vi.fn(),
+      }),
+    );
+    expect(html).toContain(formatJapaneseDate("2026-10-04"));
+    expect(html).toContain("翌日");
+    expect(html).not.toContain(formatJapaneseDate("2026-10-01"));
+    expect(html).toContain(SESSION_DATE_NOT_SELECTABLE);
   });
 });
 

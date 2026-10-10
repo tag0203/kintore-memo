@@ -19,6 +19,8 @@ export const SESSION_DATE_OUT_OF_RANGE_NOTICE =
 
 export const SESSION_DATE_SAVE_FAILED = "メニューを保存できなかったため、日付を切り替えませんでした";
 
+export const SESSION_DATE_NOT_SELECTABLE = "その日付は前日〜翌日の範囲外のため選べません。";
+
 export interface SessionDateChoice {
   date: string;
   label: "前日" | "今日" | "翌日";
@@ -37,13 +39,39 @@ export interface SessionDateStorage {
 
 const CHOICE_LABELS = ["前日", "今日", "翌日"] as const;
 
-/** 東京の前日・当日・翌日。これ以外は選べない。 */
-export function sessionDateChoices(now: Date): SessionDateChoice[] {
-  const today = tokyoCivilDate(now);
+/** 渡した「東京の今日」から前日・当日・翌日を作る。 */
+export function sessionDateChoicesFromToday(today: string): SessionDateChoice[] {
   return [-SESSION_DATE_WINDOW_DAYS, 0, SESSION_DATE_WINDOW_DAYS].map((offset, index) => ({
     date: offset === 0 ? today : addDays(today, offset),
     label: CHOICE_LABELS[index],
   }));
+}
+
+/** 東京の前日・当日・翌日。これ以外は選べない。 */
+export function sessionDateChoices(now: Date): SessionDateChoice[] {
+  return sessionDateChoicesFromToday(tokyoCivilDate(now));
+}
+
+/**
+ * 東京の暦日が進んだら today を更新する。
+ * 選択中の日付がまだ範囲内でも advanced になり、選択肢を描き直す。
+ */
+export function tokyoTodayAdvance(
+  previousToday: string,
+  now: Date,
+): { today: string; advanced: boolean; choices: SessionDateChoice[] } {
+  const today = tokyoCivilDate(now);
+  return {
+    today,
+    advanced: today !== previousToday,
+    choices: sessionDateChoicesFromToday(today),
+  };
+}
+
+/** 範囲外の日付は黙って捨てず、画面に出す文言を返す。範囲内なら null。 */
+export function outOfWindowSelectionNotice(date: string, now: Date): string | null {
+  if (isWritableSessionDate(date, now)) return null;
+  return SESSION_DATE_NOT_SELECTABLE;
 }
 
 export function isWritableSessionDate(date: string, now: Date): boolean {

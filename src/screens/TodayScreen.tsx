@@ -7,7 +7,7 @@ import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } f
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
-import { sessionDateChoices, type SessionDateChoice } from "../sessionDate";
+import { sessionDateChoicesFromToday, type SessionDateChoice } from "../sessionDate";
 
 interface PlanRow {
   name: string;
@@ -148,7 +148,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const [editing, setEditing] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [dateOpen, setDateOpen] = useState(false);
-  const dateChoices = sessionDateChoices(new Date());
+  const dateChoices = sessionDateChoicesFromToday(session.today);
   // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
   useEffect(() => {
     if (session.finished || session.exercises.length === 0) setEditing(false);

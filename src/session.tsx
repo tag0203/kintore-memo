@@ -8,11 +8,14 @@ import {
 } from "./data/exerciseName";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
+import { tokyoCivilDate } from "./domain";
 import {
   SESSION_DATE_SAVE_FAILED,
   isWritableSessionDate,
   menuFromDayPlan,
   msUntilNextTokyoDate,
+  outOfWindowSelectionNotice,
+  tokyoTodayAdvance,
   readStoredSessionDate,
   realignSessionDate,
   recallMenu,
@@ -75,6 +78,8 @@ export function removalSnapshot(
 
 interface Session {
   date: string;
+  /** 東京の今日。日付の選択肢はここから決める。 */
+  today: string;
   /** 保存していた日付が窓の外だったときだけ入る */
   dateNotice: string | null;
   memo: string;
@@ -131,6 +136,7 @@ export function SessionProvider({
 }) {
   const [boot] = useState(() => resolveStoredSessionDate(readStoredSessionDate(dateStorage), now()));
   const [date, setDateState] = useState(boot.date);
+  const [tokyoToday, setTokyoToday] = useState(() => tokyoCivilDate(now()));
   const [dateNotice, setDateNotice] = useState<string | null>(boot.notice);
   const seed = initialMenu(dayPlan != null);
   const [memo, setMemoState] = useState(seed.memo);
@@ -153,6 +159,16 @@ export function SessionProvider({
   nowRef.current = now;
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const tokyoTodayRef = useRef(tokyoToday);
+  tokyoTodayRef.current = tokyoToday;
+
+  const publishTokyoToday = useCallback((at: Date) => {
+    const advanced = tokyoTodayAdvance(tokyoTodayRef.current, at);
+    if (!advanced.advanced) return advanced;
+    tokyoTodayRef.current = advanced.today;
+    setTokyoToday(advanced.today);
+    return advanced;
+  }, []);
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -242,8 +258,15 @@ export function SessionProvider({
 
   const setDate = useCallback(
     async (next: string) => {
-      if (switching.current || next === dateRef.current) return;
-      if (!isWritableSessionDate(next, nowRef.current())) return;
+      if (switching.current) return;
+      const at = nowRef.current();
+      publishTokyoToday(at);
+      if (next === dateRef.current) return;
+      const blocked = outOfWindowSelectionNotice(next, at);
+      if (blocked) {
+        setDateNotice(blocked);
+        return;
+      }
       const previous = dateRef.current;
       switching.current = true;
       try {
@@ -258,6 +281,10 @@ export function SessionProvider({
           if (result.reason === "save_failed") {
             setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
           }
+          if (result.reason === "out_of_window") {
+            publishTokyoToday(nowRef.current());
+            setDateNotice(outOfWindowSelectionNotice(next, nowRef.current()));
+          }
           return;
         }
         applySwitchedDate(previous, result.date, null);
@@ -265,7 +292,7 @@ export function SessionProvider({
         switching.current = false;
       }
     },
-    [applySwitchedDate, dateStorage, flushPending],
+    [applySwitchedDate, dateStorage, flushPending, publishTokyoToday],
   );
 
   const dismissDateNotice = useCallback(() => setDateNotice(null), []);
@@ -311,6 +338,7 @@ export function SessionProvider({
         }
         const previous = dateRef.current;
         const at = nowRef.current();
+        publishTokyoToday(at);
         if (!isWritableSessionDate(previous, at)) {
           const outcome = await realignSessionDate({
             selected: previous,
@@ -343,7 +371,7 @@ export function SessionProvider({
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [applySwitchedDate, dateStorage, flushPending]);
+  }, [applySwitchedDate, dateStorage, flushPending, publishTokyoToday]);
 
   useEffect(() => {
     if (!saver) return;
@@ -360,6 +388,7 @@ export function SessionProvider({
     };
     return {
       date,
+      today: tokyoToday,
       dateNotice,
       dismissDateNotice,
       setDate,
@@ -403,7 +432,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, dateNotice, dismissDateNotice, exercises, finished, memo, menuDate, saveError, saver, setDate]);
+  }, [date, dateNotice, dismissDateNotice, exercises, finished, memo, menuDate, saveError, saver, setDate, tokyoToday]);
 
   if (phase === "loading") {
     return (

@@ -2,18 +2,22 @@ import { describe, expect, it, vi } from "vitest";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { tokyoCivilDate } from "./domain";
 import {
+  SESSION_DATE_NOT_SELECTABLE,
   SESSION_DATE_OUT_OF_RANGE_NOTICE,
   SESSION_DATE_STORAGE_KEY,
   isWritableSessionDate,
   menuFromDayPlan,
   msUntilNextTokyoDate,
+  outOfWindowSelectionNotice,
   readStoredSessionDate,
   realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
   sessionDateChoices,
+  sessionDateChoicesFromToday,
   storeMenu,
   switchSessionDate,
+  tokyoTodayAdvance,
   writeStoredSessionDate,
   type SessionDateStorage,
   type SessionMenu,
@@ -203,6 +207,59 @@ describe("switchSessionDate", () => {
     expect(persist).not.toHaveBeenCalled();
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(pending);
+  });
+});
+
+describe("tokyo today for the date picker", () => {
+  it("moves the three choices when Tokyo's civil date advances, even if the selected date stays writable", () => {
+    const before = tokyoTodayAdvance("2026-10-02", midday);
+    expect(before).toEqual({
+      today: "2026-10-02",
+      advanced: false,
+      choices: sessionDateChoices(midday),
+    });
+
+    const after = tokyoTodayAdvance("2026-10-02", justAfterTokyoMidnight);
+    expect(after.advanced).toBe(true);
+    expect(after.today).toBe("2026-10-03");
+    expect(after.choices).toEqual([
+      { date: "2026-10-02", label: "前日" },
+      { date: "2026-10-03", label: "今日" },
+      { date: "2026-10-04", label: "翌日" },
+    ]);
+    expect(sessionDateChoicesFromToday(after.today)).toEqual(after.choices);
+    expect(isWritableSessionDate("2026-10-02", justAfterTokyoMidnight)).toBe(true);
+    expect(isWritableSessionDate("2026-10-01", justAfterTokyoMidnight)).toBe(false);
+    expect(isWritableSessionDate("2026-10-04", justAfterTokyoMidnight)).toBe(true);
+  });
+
+  it("reports an out-of-window pick instead of treating it as unchanged", async () => {
+    expect(outOfWindowSelectionNotice("2026-10-01", justAfterTokyoMidnight)).toBe(SESSION_DATE_NOT_SELECTABLE);
+    expect(outOfWindowSelectionNotice("2026-10-02", justAfterTokyoMidnight)).toBeNull();
+    expect(outOfWindowSelectionNotice("2026-10-04", justAfterTokyoMidnight)).toBeNull();
+
+    const flush = vi.fn(async () => true);
+    const persist = vi.fn();
+    const stale = await switchSessionDate({
+      currentDate: "2026-10-02",
+      nextDate: "2026-10-01",
+      now: justAfterTokyoMidnight,
+      flush,
+      persist,
+    });
+    expect(stale).toEqual({ date: "2026-10-02", switched: false, reason: "out_of_window" });
+    expect(flush).not.toHaveBeenCalled();
+    expect(persist).not.toHaveBeenCalled();
+
+    const tomorrow = await switchSessionDate({
+      currentDate: "2026-10-02",
+      nextDate: "2026-10-04",
+      now: justAfterTokyoMidnight,
+      flush: async () => true,
+      persist,
+    });
+    expect(tomorrow).toEqual({ date: "2026-10-04", switched: true });
+    expect(persist).toHaveBeenCalledWith("2026-10-04");
   });
 });
 
