@@ -58,6 +58,18 @@ export function toISODate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/** Go の TokyoCivilDate と同じ。UTC に 9 時間足した暦日で、端末のタイムゾーンは使わない。 */
+const TOKYO_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+/** Asia/Tokyo の YYYY-MM-DD。 */
+export function tokyoCivilDate(now: Date): string {
+  const shifted = new Date(now.getTime() + TOKYO_OFFSET_MS);
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function addDays(isoDate: string, days: number): string {
   const [year, month, day] = isoDate.split("-").map(Number);
   const next = new Date(year, (month ?? 1) - 1, day ?? 1);

@@ -345,6 +345,84 @@ describe("http workout client", () => {
     }
   });
 
+  it("bootstraps each session date and does not reuse another day's rows", async () => {
+    const dates: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        const date = url.searchParams.get("date") ?? "";
+        dates.push(date);
+        const names = url.searchParams.getAll("exercise");
+        const today =
+          date === "2026-10-02"
+            ? [log({ id: "day-a", exercise: "スクワット", date })]
+            : [log({ id: "day-b", exercise: "スクワット", date })];
+        const logs: Record<string, { previous: ExerciseLog[]; today: ExerciseLog[] }> = {};
+        for (const name of names.length > 0 ? names : ["スクワット"]) {
+          logs[name] = { previous: [], today: name === "スクワット" ? today : [] };
+        }
+        return Response.json({
+          date,
+          exercises: [{ name: "スクワット", lastPickedAt: null }],
+          recent: [],
+          logs,
+        });
+      }),
+    );
+    try {
+      const workout = createHttpWorkoutClient({
+        apiBaseUrl: "https://api.example/dev/",
+        getIdToken: async () => "id-token",
+        now: new Date("2026-10-02T15:30:00.000Z"),
+      });
+      expect(await workout.getLogOnDate("スクワット", "2026-10-02")).toMatchObject([{ id: "day-a" }]);
+      const [sameDay, nextDay] = await Promise.all([
+        workout.getLogOnDate("スクワット", "2026-10-02"),
+        workout.getLogOnDate("スクワット", "2026-10-03"),
+      ]);
+      expect(sameDay).toMatchObject([{ id: "day-a" }]);
+      expect(nextDay).toMatchObject([{ id: "day-b" }]);
+      expect(await workout.getLogOnDate("スクワット", "2026-10-02")).toMatchObject([{ id: "day-a" }]);
+      expect(dates.filter((value) => value === "2026-10-03").length).toBeGreaterThan(0);
+
+      await workout.listExercises("2026-10-01");
+      expect(dates.at(-1)).toBe("2026-10-01");
+      expect(await workout.listRecentExercises("2026-10-03")).toEqual([]);
+      expect(dates.at(-1)).toBe("2026-10-03");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses the Tokyo civil date when the cache has no session date yet", async () => {
+    let requested = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = new URL(String(input));
+        requested = url.searchParams.get("date") ?? "";
+        return Response.json({
+          date: requested,
+          exercises: [],
+          recent: [],
+          logs: {},
+        });
+      }),
+    );
+    try {
+      const workout = createHttpWorkoutClient({
+        apiBaseUrl: "https://api.example/dev/",
+        getIdToken: async () => "id-token",
+        now: new Date("2026-10-02T15:30:00.000Z"),
+      });
+      await workout.listExercises();
+      expect(requested).toBe("2026-10-03");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("appends a safe requestId to the fixed 5xx message", async () => {
     vi.stubGlobal(
       "fetch",

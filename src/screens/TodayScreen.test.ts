@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ExerciseLog } from "../domain";
-import { TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
+import { SESSION_DATE_OUT_OF_RANGE_NOTICE } from "../sessionDate";
+import { SessionDatePicker, TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
   return {
@@ -53,6 +54,53 @@ describe("TodayExerciseRow", () => {
     );
     expect(html).not.toContain("外す");
     expect(html).toContain("2件");
+  });
+});
+
+describe("SessionDatePicker", () => {
+  const choices = [
+    { date: "2026-10-01", label: "前日" as const },
+    { date: "2026-10-02", label: "今日" as const },
+    { date: "2026-10-03", label: "翌日" as const },
+  ];
+
+  it("shows yesterday, today, and tomorrow as separate choices", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionDatePicker, {
+        date: "2026-10-02",
+        choices,
+        open: true,
+        notice: null,
+        onToggle: vi.fn(),
+        onSelect: vi.fn(),
+        onDismissNotice: vi.fn(),
+      }),
+    );
+    expect(html).toContain("2026/10/2");
+    expect(html).toContain("前日");
+    expect(html).toContain("今日");
+    expect(html).toContain("翌日");
+    expect(html).toContain("2026/10/1");
+    expect(html).toContain("2026/10/3");
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).not.toContain("<style");
+  });
+
+  it("shows the out-of-range notice on screen", () => {
+    const html = renderToStaticMarkup(
+      createElement(SessionDatePicker, {
+        date: "2026-10-02",
+        choices,
+        open: false,
+        notice: SESSION_DATE_OUT_OF_RANGE_NOTICE,
+        onToggle: vi.fn(),
+        onSelect: vi.fn(),
+        onDismissNotice: vi.fn(),
+      }),
+    );
+    expect(html).toContain(SESSION_DATE_OUT_OF_RANGE_NOTICE);
+    expect(html).toContain("閉じる");
+    expect(html).not.toContain('class="date-choices"');
   });
 });
 

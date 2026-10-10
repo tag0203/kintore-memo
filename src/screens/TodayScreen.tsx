@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
+import { ChevronDownIcon, Icon } from "../components/icons";
 import { useClient } from "../clientContext";
 import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } from "../domain";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
+import { sessionDateChoices, type SessionDateChoice } from "../sessionDate";
 
 interface PlanRow {
   name: string;
@@ -79,6 +81,65 @@ export function TodayExerciseRow({
   );
 }
 
+export function SessionDatePicker({
+  date,
+  choices,
+  open,
+  notice,
+  onToggle,
+  onSelect,
+  onDismissNotice,
+}: {
+  date: string;
+  choices: readonly SessionDateChoice[];
+  open: boolean;
+  notice: string | null;
+  onToggle: () => void;
+  onSelect: (date: string) => void;
+  onDismissNotice: () => void;
+}) {
+  return (
+    <div className="session-date">
+      <button
+        type="button"
+        className="today-date-btn"
+        aria-expanded={open}
+        aria-controls="session-date-choices"
+        onClick={onToggle}
+      >
+        <span>{formatJapaneseDate(date)}</span>
+        <Icon>
+          <ChevronDownIcon />
+        </Icon>
+      </button>
+      {open && (
+        <div id="session-date-choices" className="date-choices" role="group" aria-label="日付を選ぶ">
+          {choices.map((choice) => (
+            <button
+              key={choice.date}
+              type="button"
+              className={choice.date === date ? "date-choice is-selected" : "date-choice"}
+              aria-pressed={choice.date === date}
+              onClick={() => onSelect(choice.date)}
+            >
+              <span className="date-choice-label">{choice.label}</span>
+              <span className="date-choice-value">{formatJapaneseDate(choice.date)}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {notice && (
+        <div className="date-notice" role="status">
+          <p>{notice}</p>
+          <button type="button" className="date-notice-dismiss" onClick={onDismissNotice}>
+            閉じる
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) {
   const session = useSession();
   const client = useClient();
@@ -86,6 +147,8 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [editing, setEditing] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [dateOpen, setDateOpen] = useState(false);
+  const dateChoices = sessionDateChoices(new Date());
   // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
   useEffect(() => {
     if (session.finished || session.exercises.length === 0) setEditing(false);
@@ -120,15 +183,24 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   return (
     <section className="screen">
       <div className="today-head">
-        <div>
-          <h1 className="today-title">今日のトレーニング</h1>
-          <p className="today-date">{formatJapaneseDate(session.date)}</p>
-        </div>
+        <h1 className="today-title">今日のトレーニング</h1>
         {auth.required && auth.email && (
           <button type="button" className="text-btn" onClick={auth.signOut}>
             ログアウト
           </button>
         )}
+        <SessionDatePicker
+          date={session.date}
+          choices={dateChoices}
+          open={dateOpen}
+          notice={session.dateNotice}
+          onToggle={() => setDateOpen((value) => !value)}
+          onSelect={(date) => {
+            setDateOpen(false);
+            void session.setDate(date);
+          }}
+          onDismissNotice={session.dismissDateNotice}
+        />
       </div>
 
       {session.finished && (

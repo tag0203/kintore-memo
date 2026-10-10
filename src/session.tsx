@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAuth } from "./auth/AuthContext";
 import { DAY_PLAN_EXERCISE_LIMIT, DAY_PLAN_TOO_MANY_EXERCISES, type DayPlanClient } from "./data/dayPlanClient";
 import {
@@ -8,7 +8,18 @@ import {
 } from "./data/exerciseName";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
-import { toISODate } from "./domain";
+import {
+  isWritableSessionDate,
+  menuFromDayPlan,
+  readStoredSessionDate,
+  recallMenu,
+  resolveStoredSessionDate,
+  storeMenu,
+  switchSessionDate,
+  writeStoredSessionDate,
+  type SessionDateStorage,
+  type SessionMenu,
+} from "./sessionDate";
 
 export type AddExerciseResult = "added" | "present" | "empty" | "too_many" | "invalid" | "too_long";
 
@@ -61,11 +72,16 @@ export function removalSnapshot(
 
 interface Session {
   date: string;
+  /** 保存していた日付が窓の外だったときだけ入る */
+  dateNotice: string | null;
   memo: string;
   exercises: string[];
   finished: boolean;
   /** 永続化に失敗したときだけ入る。モック経路では null */
   saveError: string | null;
+  /** 東京の前日・当日・翌日だけ。切り替える前に、入力途中の DayPlan を flush する。 */
+  setDate: (date: string) => Promise<void>;
+  dismissDateNotice: () => void;
   setMemo: (memo: string) => void;
   addExercise: (name: string) => AddExerciseResult;
   /**
@@ -79,6 +95,19 @@ interface Session {
 
 const SessionContext = createContext<Session | null>(null);
 
+const defaultDateStorage: SessionDateStorage = {
+  getItem(key) {
+    try {
+      return globalThis.localStorage?.getItem(key) ?? null;
+    } catch {
+      return null;
+    }
+  },
+  setItem(key, value) {
+    globalThis.localStorage?.setItem(key, value);
+  },
+};
+
 /** API 未設定のローカルはシード。DayPlan を読むときは空から始め、シードで上書きしない。 */
 export function initialMenu(persistDayPlan: boolean): { memo: string; exercises: string[] } {
   if (persistDayPlan) return { memo: "", exercises: [] };
@@ -88,20 +117,37 @@ export function initialMenu(persistDayPlan: boolean): { memo: string; exercises:
 export function SessionProvider({
   children,
   dayPlan = null,
+  now = () => new Date(),
+  dateStorage = defaultDateStorage,
 }: {
   children: ReactNode;
   dayPlan?: DayPlanClient | null;
+  /** テストから東京の「いま」を渡す。画面は `new Date()`。 */
+  now?: () => Date;
+  dateStorage?: SessionDateStorage;
 }) {
-  const [date] = useState(() => toISODate(new Date()));
+  const [boot] = useState(() => resolveStoredSessionDate(readStoredSessionDate(dateStorage), now()));
+  const [date, setDateState] = useState(boot.date);
+  const [dateNotice, setDateNotice] = useState<string | null>(boot.notice);
   const seed = initialMenu(dayPlan != null);
   const [memo, setMemoState] = useState(seed.memo);
   const [exercises, setExercises] = useState<string[]>(seed.exercises);
   const [finished, setFinished] = useState(false);
+  /** DayPlan を読むあいだは null。モックは選んだ日付のメニューが state に入っている。 */
+  const [menuDate, setMenuDate] = useState<string | null>(dayPlan ? null : boot.date);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(dayPlan ? "loading" : "ready");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const { registerBeforeSignOut, readSessionEpoch, required, signOut } = useAuth();
+  const dateRef = useRef(date);
+  dateRef.current = date;
+  const menuRef = useRef<SessionMenu>({ memo, exercises, finished });
+  menuRef.current = { memo, exercises, finished };
+  const localMenus = useRef(new Map<string, SessionMenu>());
+  const switching = useRef(false);
+  const nowRef = useRef(now);
+  nowRef.current = now;
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -110,6 +156,14 @@ export function SessionProvider({
       allowWrite: () => readSessionEpoch() === epoch,
     });
   }, [dayPlan, readSessionEpoch]);
+
+  const saverRef = useRef(saver);
+  saverRef.current = saver;
+
+  useEffect(() => {
+    if (!boot.notice) return;
+    writeStoredSessionDate(dateStorage, boot.date);
+  }, [boot.date, boot.notice, dateStorage]);
 
   useEffect(() => {
     if (!saver) return;
@@ -126,16 +180,12 @@ export function SessionProvider({
     dayPlan.load(date).then(
       (plan) => {
         if (cancelled) return;
-        const next = {
-          date,
-          memo: plan.memo,
-          exercises: [...plan.exercises],
-          finished: plan.finished,
-        };
-        saver.markSaved(next);
-        setMemoState(next.memo);
-        setExercises(next.exercises);
-        setFinished(next.finished);
+        const nextMenu = menuFromDayPlan(plan);
+        saver.markSaved({ date, ...nextMenu });
+        setMemoState(nextMenu.memo);
+        setExercises(nextMenu.exercises);
+        setFinished(nextMenu.finished);
+        setMenuDate(date);
         setSaveError(null);
         setPhase("ready");
       },
@@ -151,9 +201,53 @@ export function SessionProvider({
   }, [attempt, date, dayPlan, saver]);
 
   useEffect(() => {
-    if (phase !== "ready" || !saver) return;
+    if (phase !== "ready" || !saver || menuDate !== date) return;
     saver.schedule({ date, memo, exercises, finished });
-  }, [phase, saver, date, memo, exercises, finished]);
+  }, [phase, saver, date, memo, exercises, finished, menuDate]);
+
+  const setDate = useCallback(
+    async (next: string) => {
+      if (switching.current || next === dateRef.current) return;
+      if (!isWritableSessionDate(next, nowRef.current())) return;
+      const previous = dateRef.current;
+      switching.current = true;
+      try {
+        const result = await switchSessionDate({
+          currentDate: previous,
+          nextDate: next,
+          now: nowRef.current(),
+          flush: () => saverRef.current?.flush() ?? Promise.resolve(),
+          persist: (value) => writeStoredSessionDate(dateStorage, value),
+        });
+        if (!result.switched) return;
+        // flush の通信中に入った変更を、日付を変える前にもう一度送る。
+        await saverRef.current?.flush();
+        setDateNotice(null);
+        if (dayPlan) {
+          // 読み込みが終わるまで、前のメニューを新しい日付へ保存しない。
+          setMenuDate(null);
+          setPhase("loading");
+          dateRef.current = result.date;
+          setDateState(result.date);
+          return;
+        }
+        storeMenu(localMenus.current, previous, menuRef.current);
+        const restored = recallMenu(localMenus.current, result.date);
+        menuRef.current = restored;
+        dateRef.current = result.date;
+        setMemoState(restored.memo);
+        setExercises(restored.exercises);
+        setFinished(restored.finished);
+        setMenuDate(result.date);
+        setDateState(result.date);
+      } finally {
+        switching.current = false;
+      }
+    },
+    [dateStorage, dayPlan],
+  );
+
+  const dismissDateNotice = useCallback(() => setDateNotice(null), []);
 
   useEffect(() => {
     if (!saver) return;
@@ -179,12 +273,15 @@ export function SessionProvider({
 
   const value = useMemo<Session>(() => {
     const publish = (next: { memo: string; exercises: string[]; finished: boolean }, immediate: boolean) => {
-      if (!saver) return;
+      if (!saver || menuDate !== date) return;
       saver.schedule({ date, ...next });
       if (immediate) void saver.flush();
     };
     return {
       date,
+      dateNotice,
+      dismissDateNotice,
+      setDate,
       memo,
       exercises,
       finished,
@@ -225,7 +322,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, exercises, finished, memo, saveError, saver]);
+  }, [date, dateNotice, dismissDateNotice, exercises, finished, memo, menuDate, saveError, saver, setDate]);
 
   if (phase === "loading") {
     return (

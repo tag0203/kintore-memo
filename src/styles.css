@@ -47,11 +47,13 @@ button, input { appearance: none; }
 .screen.picker { padding-bottom: 0; }
 
 .today-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  column-gap: 12px;
 }
+.today-head > .text-btn { grid-column: 2; grid-row: 1; }
+.session-date { grid-column: 1 / -1; grid-row: 2; margin-top: 2px; }
 .today-title {
   margin: 6px 0 0;
   font-size: 32px;
@@ -59,7 +61,62 @@ button, input { appearance: none; }
   font-weight: 700;
   letter-spacing: -0.03em;
 }
-.today-date { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+.today-date-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+}
+.today-date-btn .icon { width: 16px; height: 16px; }
+.today-date-btn[aria-expanded="true"] .icon { transform: rotate(180deg); }
+.date-choices { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 0; }
+.date-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 15px;
+  text-align: left;
+}
+.date-choice.is-selected { border-color: var(--blue); background: #eef4ff; }
+.date-choice-label { font-weight: 700; }
+.date-choice-value { color: var(--muted); }
+.date-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff6e8;
+  color: #8a5a00;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.date-notice p { margin: 0; }
+.date-notice-dismiss {
+  flex: none;
+  min-height: 44px;
+  padding: 8px 0 8px 8px;
+  border: 0;
+  background: transparent;
+  color: #8a5a00;
+  font-size: 13px;
+  font-weight: 700;
+}
 .text-btn {
   flex: none;
   margin-top: 10px;
