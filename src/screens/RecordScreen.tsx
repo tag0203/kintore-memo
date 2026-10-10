@@ -76,8 +76,6 @@ export function RecordScreen({
   const todayLogs = loaded.data?.[1] ?? [];
   const dirty = draft != null && JSON.stringify(draft) !== baseline;
 
-  useEffect(() => session.holdAutomaticDateChange(), [session.holdAutomaticDateChange]);
-
   function update(partial: Partial<Draft>) {
     setDraft((current) => (current ? { ...current, ...partial } : current));
     setError(null);

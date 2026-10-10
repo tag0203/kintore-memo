@@ -2,25 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { tokyoCivilDate } from "./domain";
 import {
-  SESSION_DATE_NOT_SELECTABLE,
-  SESSION_DATE_OUT_OF_RANGE_NOTICE,
   SESSION_DATE_STORAGE_KEY,
-  SESSION_DATE_UNSAVEABLE_NOTICE,
-  createDateChangeHold,
   isWritableSessionDate,
   menuFromDayPlan,
-  msUntilNextTokyoDate,
-  outOfWindowSelectionNotice,
   readStoredSessionDate,
-  realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
-  sessionDateAfterUnsaveable,
   sessionDateChoices,
-  sessionDateChoicesFromToday,
   storeMenu,
   switchSessionDate,
-  tokyoTodayAdvance,
   writeStoredSessionDate,
   type SessionDateStorage,
   type SessionMenu,
@@ -74,41 +64,18 @@ describe("stored session date", () => {
     const storage = memoryStorage();
     writeStoredSessionDate(storage, "2026-10-01");
     expect(readStoredSessionDate(storage)).toBe("2026-10-01");
-    expect(resolveStoredSessionDate(readStoredSessionDate(storage), midday)).toEqual({
-      date: "2026-10-01",
-      notice: null,
-    });
+    expect(resolveStoredSessionDate(readStoredSessionDate(storage), midday)).toBe("2026-10-01");
   });
 
-  it("keeps yesterday after Tokyo midnight while it is still inside the window", () => {
-    const storage = memoryStorage("2026-10-02");
-    expect(resolveStoredSessionDate(readStoredSessionDate(storage), justAfterTokyoMidnight)).toEqual({
-      date: "2026-10-02",
-      notice: null,
-    });
-  });
-
-  it("falls back to Tokyo today when the stored date is outside the window", () => {
-    const storage = memoryStorage("2026-09-30");
-    const resolved = resolveStoredSessionDate(readStoredSessionDate(storage), midday);
-    expect(resolved).toEqual({ date: "2026-10-02", notice: SESSION_DATE_OUT_OF_RANGE_NOTICE });
-    expect(resolved.notice).toContain("今日");
-
-    const afterMidnight = resolveStoredSessionDate(readStoredSessionDate(memoryStorage("2026-10-01")), justAfterTokyoMidnight);
-    expect(afterMidnight.date).toBe("2026-10-03");
-    expect(afterMidnight.notice).toBe(SESSION_DATE_OUT_OF_RANGE_NOTICE);
+  it("keeps a stored date that is outside the writable window", () => {
+    expect(resolveStoredSessionDate("2026-09-30", midday)).toBe("2026-09-30");
+    expect(resolveStoredSessionDate("2026-10-01", justAfterTokyoMidnight)).toBe("2026-10-01");
   });
 
   it("starts on Tokyo today when nothing is stored, including a broken value", () => {
-    expect(resolveStoredSessionDate(null, justAfterTokyoMidnight)).toEqual({
-      date: "2026-10-03",
-      notice: null,
-    });
-    expect(resolveStoredSessionDate("", midday).notice).toBeNull();
-    expect(resolveStoredSessionDate("2026-10-02T00:00:00", midday)).toEqual({
-      date: "2026-10-02",
-      notice: SESSION_DATE_OUT_OF_RANGE_NOTICE,
-    });
+    expect(resolveStoredSessionDate(null, justAfterTokyoMidnight)).toBe("2026-10-03");
+    expect(resolveStoredSessionDate("", midday)).toBe("2026-10-02");
+    expect(resolveStoredSessionDate("2026-10-02T00:00:00", midday)).toBe("2026-10-02");
   });
 
   it("ignores a storage read that throws", () => {
@@ -132,11 +99,12 @@ describe("switchSessionDate", () => {
     const result = await switchSessionDate({
       currentDate: "2026-10-02",
       nextDate: "2026-10-01",
-      now: midday,
+      choice: "save",
       flush: async () => {
         order.push("flush");
         return true;
       },
+      discard: () => order.push("discard"),
       persist: (date) => {
         order.push(`persist:${date}`);
         writeStoredSessionDate(storage, date);
@@ -145,56 +113,59 @@ describe("switchSessionDate", () => {
     expect(result).toEqual({ date: "2026-10-01", switched: true });
     expect(order).toEqual(["flush", "persist:2026-10-01"]);
     expect(readStoredSessionDate(storage)).toBe("2026-10-01");
-    expect(resolveStoredSessionDate(readStoredSessionDate(storage), midday).date).toBe("2026-10-01");
+    expect(resolveStoredSessionDate(readStoredSessionDate(storage), midday)).toBe("2026-10-01");
   });
 
-  it("does not flush when the date is unchanged or outside the window", async () => {
+  it("does not flush when the date is unchanged", async () => {
     const flush = vi.fn(async () => true);
     const persist = vi.fn();
+    const discard = vi.fn();
     const same = await switchSessionDate({
       currentDate: "2026-10-02",
       nextDate: "2026-10-02",
-      now: midday,
+      choice: "save",
       flush,
-      persist,
-    });
-    const far = await switchSessionDate({
-      currentDate: "2026-10-02",
-      nextDate: "2026-09-30",
-      now: midday,
-      flush,
+      discard,
       persist,
     });
     expect(same).toEqual({ date: "2026-10-02", switched: false, reason: "unchanged" });
-    expect(far).toEqual({ date: "2026-10-02", switched: false, reason: "out_of_window" });
     expect(flush).not.toHaveBeenCalled();
     expect(persist).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
   });
 
   it("stays on the current date when the pending save fails", async () => {
     const persist = vi.fn();
+    const discard = vi.fn();
     const result = await switchSessionDate({
       currentDate: "2026-10-02",
       nextDate: "2026-10-01",
-      now: midday,
+      choice: "save",
       flush: async () => false,
+      discard,
       persist,
     });
     expect(result).toEqual({ date: "2026-10-02", switched: false, reason: "save_failed" });
     expect(persist).not.toHaveBeenCalled();
+    expect(discard).not.toHaveBeenCalled();
   });
 
-  it("does not persist when the current date can never be saved", async () => {
-    const persist = vi.fn();
+  it("discards unsaved edits and switches without sending", async () => {
+    const flush = vi.fn(async () => true);
+    const discard = vi.fn();
+    const storage = memoryStorage("2026-10-02");
     const result = await switchSessionDate({
-      currentDate: "2026-10-01",
+      currentDate: "2026-10-02",
       nextDate: "2026-10-03",
-      now: justAfterTokyoMidnight,
-      flush: async () => ({ ok: false, unsaveable: true }),
-      persist,
+      choice: "discard",
+      flush,
+      discard,
+      persist: (date) => writeStoredSessionDate(storage, date),
     });
-    expect(result).toEqual({ date: "2026-10-01", switched: false, reason: "unsaveable" });
-    expect(persist).not.toHaveBeenCalled();
+    expect(result).toEqual({ date: "2026-10-03", switched: true });
+    expect(flush).not.toHaveBeenCalled();
+    expect(discard).toHaveBeenCalledOnce();
+    expect(readStoredSessionDate(storage)).toBe("2026-10-03");
   });
 
   it("keeps the unsaved DayPlan when the flush fails, so a later save can still write it", async () => {
@@ -215,158 +186,15 @@ describe("switchSessionDate", () => {
     const result = await switchSessionDate({
       currentDate: "2026-10-02",
       nextDate: "2026-10-01",
-      now: midday,
+      choice: "save",
       flush: () => saver.flush(),
+      discard: () => saver.dropPending(),
       persist,
     });
     expect(result).toEqual({ date: "2026-10-02", switched: false, reason: "save_failed" });
     expect(persist).not.toHaveBeenCalled();
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(pending);
-  });
-});
-
-describe("tokyo today for the date picker", () => {
-  it("moves the three choices when Tokyo's civil date advances, even if the selected date stays writable", () => {
-    const before = tokyoTodayAdvance("2026-10-02", midday);
-    expect(before).toEqual({
-      today: "2026-10-02",
-      advanced: false,
-      choices: sessionDateChoices(midday),
-    });
-
-    const after = tokyoTodayAdvance("2026-10-02", justAfterTokyoMidnight);
-    expect(after.advanced).toBe(true);
-    expect(after.today).toBe("2026-10-03");
-    expect(after.choices).toEqual([
-      { date: "2026-10-02", label: "前日" },
-      { date: "2026-10-03", label: "今日" },
-      { date: "2026-10-04", label: "翌日" },
-    ]);
-    expect(sessionDateChoicesFromToday(after.today)).toEqual(after.choices);
-    expect(isWritableSessionDate("2026-10-02", justAfterTokyoMidnight)).toBe(true);
-    expect(isWritableSessionDate("2026-10-01", justAfterTokyoMidnight)).toBe(false);
-    expect(isWritableSessionDate("2026-10-04", justAfterTokyoMidnight)).toBe(true);
-  });
-
-  it("reports an out-of-window pick instead of treating it as unchanged", async () => {
-    expect(outOfWindowSelectionNotice("2026-10-01", justAfterTokyoMidnight)).toBe(SESSION_DATE_NOT_SELECTABLE);
-    expect(outOfWindowSelectionNotice("2026-10-02", justAfterTokyoMidnight)).toBeNull();
-    expect(outOfWindowSelectionNotice("2026-10-04", justAfterTokyoMidnight)).toBeNull();
-
-    const flush = vi.fn(async () => true);
-    const persist = vi.fn();
-    const stale = await switchSessionDate({
-      currentDate: "2026-10-02",
-      nextDate: "2026-10-01",
-      now: justAfterTokyoMidnight,
-      flush,
-      persist,
-    });
-    expect(stale).toEqual({ date: "2026-10-02", switched: false, reason: "out_of_window" });
-    expect(flush).not.toHaveBeenCalled();
-    expect(persist).not.toHaveBeenCalled();
-
-    const tomorrow = await switchSessionDate({
-      currentDate: "2026-10-02",
-      nextDate: "2026-10-04",
-      now: justAfterTokyoMidnight,
-      flush: async () => true,
-      persist,
-    });
-    expect(tomorrow).toEqual({ date: "2026-10-04", switched: true });
-    expect(persist).toHaveBeenCalledWith("2026-10-04");
-  });
-});
-
-describe("realignSessionDate", () => {
-  it("leaves a date that is still inside the Tokyo window", async () => {
-    const flush = vi.fn(async () => true);
-    const persist = vi.fn();
-    const result = await realignSessionDate({
-      selected: "2026-10-02",
-      now: justAfterTokyoMidnight,
-      flush,
-      persist,
-    });
-    expect(result).toEqual({ date: "2026-10-02", notice: null, changed: false, dropped: false });
-    expect(flush).not.toHaveBeenCalled();
-    expect(persist).not.toHaveBeenCalled();
-    expect(msUntilNextTokyoDate(new Date("2026-10-02T14:59:00.000Z"))).toBe(60_000);
-    expect(msUntilNextTokyoDate(justAfterTokyoMidnight)).toBe(23.5 * 60 * 60 * 1000);
-  });
-
-  it("saves, then falls back to Tokyo today when the selected date leaves the window", async () => {
-    const order: string[] = [];
-    const storage = memoryStorage("2026-10-01");
-    const result = await realignSessionDate({
-      selected: "2026-10-01",
-      now: justAfterTokyoMidnight,
-      flush: async () => {
-        order.push("flush");
-        return true;
-      },
-      persist: (date) => {
-        order.push(`persist:${date}`);
-        writeStoredSessionDate(storage, date);
-      },
-    });
-    expect(result).toEqual({
-      date: "2026-10-03",
-      notice: SESSION_DATE_OUT_OF_RANGE_NOTICE,
-      changed: true,
-      dropped: false,
-    });
-    expect(order).toEqual(["flush", "persist:2026-10-03"]);
-    expect(readStoredSessionDate(storage)).toBe("2026-10-03");
-  });
-
-  it("does not change the date when the save before the fallback fails", async () => {
-    const persist = vi.fn();
-    const result = await realignSessionDate({
-      selected: "2026-10-01",
-      now: justAfterTokyoMidnight,
-      flush: async () => false,
-      persist,
-    });
-    expect(result).toEqual({ date: "2026-10-01", notice: null, changed: false, dropped: false });
-    expect(persist).not.toHaveBeenCalled();
-  });
-
-  it("moves to today without retrying when the old date can never be saved", async () => {
-    const persist = vi.fn();
-    const result = await realignSessionDate({
-      selected: "2026-10-01",
-      now: justAfterTokyoMidnight,
-      flush: async () => ({ ok: false, unsaveable: true }),
-      persist,
-    });
-    expect(result).toEqual({
-      date: "2026-10-03",
-      notice: SESSION_DATE_UNSAVEABLE_NOTICE,
-      changed: true,
-      dropped: true,
-    });
-    expect(persist).toHaveBeenCalledOnce();
-    expect(persist).toHaveBeenCalledWith("2026-10-03");
-    expect(sessionDateAfterUnsaveable("2026-10-04", justAfterTokyoMidnight)).toBe("2026-10-04");
-    expect(sessionDateAfterUnsaveable("2026-10-01", justAfterTokyoMidnight)).toBe("2026-10-03");
-  });
-});
-
-describe("automatic date change hold", () => {
-  it("stays held until every draft is released, and a second release is a no-op", () => {
-    const hold = createDateChangeHold();
-    expect(hold.held()).toBe(false);
-    const release = hold.hold();
-    const second = hold.hold();
-    expect(hold.held()).toBe(true);
-    release();
-    expect(hold.held()).toBe(true);
-    release();
-    expect(hold.held()).toBe(true);
-    second();
-    expect(hold.held()).toBe(false);
   });
 });
 

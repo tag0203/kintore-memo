@@ -7,7 +7,7 @@ import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } f
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
 import { useSession } from "../session";
-import { sessionDateChoicesFromToday, type SessionDateChoice } from "../sessionDate";
+import { sessionDateChoices, type SessionDateChoice } from "../sessionDate";
 
 interface PlanRow {
   name: string;
@@ -85,21 +85,17 @@ export function SessionDatePicker({
   date,
   choices,
   open,
-  notice,
   busy = false,
   onToggle,
   onSelect,
-  onDismissNotice,
 }: {
   date: string;
   choices: readonly SessionDateChoice[];
   open: boolean;
-  notice: string | null;
   /** 保存待ちのあいだは、別の日付を選べない。 */
   busy?: boolean;
   onToggle: () => void;
   onSelect: (date: string) => void;
-  onDismissNotice: () => void;
 }) {
   return (
     <div className="session-date">
@@ -134,14 +130,6 @@ export function SessionDatePicker({
           ))}
         </div>
       )}
-      {notice && (
-        <div className="date-notice" role="status">
-          <p>{notice}</p>
-          <button type="button" className="date-notice-dismiss" onClick={onDismissNotice}>
-            閉じる
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -154,7 +142,8 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const [editing, setEditing] = useState(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [dateOpen, setDateOpen] = useState(false);
-  const dateChoices = sessionDateChoicesFromToday(session.today);
+  const [dateChoices, setDateChoices] = useState<SessionDateChoice[]>([]);
+  const [pendingDate, setPendingDate] = useState<string | null>(null);
   // 「今日を終了」のあとは再開するまで外せない。終了や空メニューでは編集を閉じる。
   useEffect(() => {
     if (session.finished || session.exercises.length === 0) setEditing(false);
@@ -199,18 +188,22 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           date={session.date}
           choices={dateChoices}
           open={dateOpen}
-          notice={session.dateNotice}
-          busy={session.dateBusy}
+          busy={session.dateBusy || pendingDate !== null}
           onToggle={() => {
-            if (session.dateBusy) return;
+            if (session.dateBusy || pendingDate) return;
+            if (!dateOpen) setDateChoices(sessionDateChoices(new Date()));
             setDateOpen((value) => !value);
           }}
           onSelect={(date) => {
-            if (session.dateBusy) return;
+            if (session.dateBusy || pendingDate) return;
             setDateOpen(false);
-            void session.setDate(date);
+            if (date === session.date) return;
+            if (session.hasUnsavedEdits()) {
+              setPendingDate(date);
+              return;
+            }
+            void session.setDate(date, "clean");
           }}
-          onDismissNotice={session.dismissDateNotice}
         />
       </div>
 
@@ -305,6 +298,28 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
             今日を終了
           </button>
         </div>
+      )}
+
+      {pendingDate && (
+        <Modal
+          titleId="date-switch-title"
+          title="日付を切り替えますか？"
+          body="この日付の変更はまだ送られていません。"
+          cancelLabel="キャンセル"
+          alternateLabel="破棄して切り替える"
+          confirmLabel="送信して切り替える"
+          onCancel={() => setPendingDate(null)}
+          onAlternate={() => {
+            const next = pendingDate;
+            setPendingDate(null);
+            void session.setDate(next, "discard");
+          }}
+          onConfirm={() => {
+            const next = pendingDate;
+            setPendingDate(null);
+            void session.setDate(next, "save");
+          }}
+        />
       )}
 
       {confirmEnd && (

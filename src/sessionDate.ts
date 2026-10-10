@@ -1,4 +1,4 @@
-import { addDays, tokyoCivilDate } from "./domain";
+import { addDays, isISODate, tokyoCivilDate } from "./domain";
 
 /**
  * Go API の SessionDateWindowDays と同じ。
@@ -14,15 +14,7 @@ export const SESSION_DATE_WINDOW_DAYS = 1;
  */
 export const SESSION_DATE_STORAGE_KEY = "kintore-memo.session-date";
 
-export const SESSION_DATE_OUT_OF_RANGE_NOTICE =
-  "選んでいた日付は前日〜翌日の範囲外になったため、今日に戻しました。";
-
-export const SESSION_DATE_SAVE_FAILED = "メニューを保存できなかったため、日付を切り替えませんでした";
-
-export const SESSION_DATE_UNSAVEABLE_NOTICE =
-  "前の日付のメニューは保存できないため、保存せずに切り替えました。";
-
-export const SESSION_DATE_NOT_SELECTABLE = "その日付は前日〜翌日の範囲外のため選べません。";
+export const SESSION_DATE_SAVE_FAILED = "保存できませんでした";
 
 export interface SessionDateChoice {
   date: string;
@@ -55,44 +47,17 @@ export function sessionDateChoices(now: Date): SessionDateChoice[] {
   return sessionDateChoicesFromToday(tokyoCivilDate(now));
 }
 
-/**
- * 東京の暦日が進んだら today を更新する。
- * 選択中の日付がまだ範囲内でも advanced になり、選択肢を描き直す。
- */
-export function tokyoTodayAdvance(
-  previousToday: string,
-  now: Date,
-): { today: string; advanced: boolean; choices: SessionDateChoice[] } {
-  const today = tokyoCivilDate(now);
-  return {
-    today,
-    advanced: today !== previousToday,
-    choices: sessionDateChoicesFromToday(today),
-  };
-}
-
-/** 範囲外の日付は黙って捨てず、画面に出す文言を返す。範囲内なら null。 */
-export function outOfWindowSelectionNotice(date: string, now: Date): string | null {
-  if (isWritableSessionDate(date, now)) return null;
-  return SESSION_DATE_NOT_SELECTABLE;
-}
-
 export function isWritableSessionDate(date: string, now: Date): boolean {
   return sessionDateChoices(now).some((choice) => choice.date === date);
 }
 
 /**
- * 保存していた日付を、いまの東京の窓に合わせて決める。
- * 空なら今日。窓の外（2日以上ずれ、壊れた文字列）なら今日に戻し、notice を返す。
+ * 保存していた日付を、起動時の選択として使う。
+ * 空や壊れた文字列だけ今日。範囲外でも、その日付のまま開く。
  */
-export function resolveStoredSessionDate(
-  stored: string | null,
-  now: Date,
-): { date: string; notice: string | null } {
-  const today = tokyoCivilDate(now);
-  if (stored == null || stored === "") return { date: today, notice: null };
-  if (isWritableSessionDate(stored, now)) return { date: stored, notice: null };
-  return { date: today, notice: SESSION_DATE_OUT_OF_RANGE_NOTICE };
+export function resolveStoredSessionDate(stored: string | null, now: Date): string {
+  if (stored != null && stored !== "" && isISODate(stored)) return stored;
+  return tokyoCivilDate(now);
 }
 
 export function readStoredSessionDate(storage: SessionDateStorage): string | null {
@@ -112,108 +77,36 @@ export function writeStoredSessionDate(storage: SessionDateStorage, date: string
   }
 }
 
+export type DateSwitchChoice = "clean" | "save" | "discard";
+
 export type SessionDateSwitch =
   | { switched: true; date: string }
-  | { switched: false; date: string; reason: "unchanged" | "out_of_window" | "save_failed" | "unsaveable" };
-
-/** flush の結果。boolean の false は一時的な失敗（再試行できる）。 */
-export interface FlushResult {
-  ok: boolean;
-  unsaveable: boolean;
-}
-
-async function readFlush(flush: () => Promise<boolean | FlushResult>): Promise<FlushResult> {
-  const value = await flush();
-  if (typeof value === "boolean") return { ok: value, unsaveable: false };
-  return { ok: value.ok, unsaveable: value.ok ? false : value.unsaveable };
-}
+  | { switched: false; date: string; reason: "unchanged" | "save_failed" };
 
 /**
- * 日付を変える。窓の外と、いまと同じ日付は何もしない。
- * 未保存の DayPlan が保存できたときだけ persist する。
- * 一時的な失敗は今の日付に留まる。date_window のように保存できないときは unsaveable を返し、呼び出し側が捨てて移る。
+ * 日付を変える。未保存を送るときは、保存できたときだけ persist する。
+ * 破棄するときは送らずに persist する。
  */
 export async function switchSessionDate(input: {
   currentDate: string;
   nextDate: string;
-  now: Date;
-  flush: () => Promise<boolean | FlushResult>;
+  choice: DateSwitchChoice;
+  flush: () => Promise<boolean>;
+  discard: () => void;
   persist: (date: string) => void;
 }): Promise<SessionDateSwitch> {
   if (input.nextDate === input.currentDate) {
     return { date: input.currentDate, switched: false, reason: "unchanged" };
   }
-  if (!isWritableSessionDate(input.nextDate, input.now)) {
-    return { date: input.currentDate, switched: false, reason: "out_of_window" };
+  if (input.choice === "discard") {
+    input.discard();
+    input.persist(input.nextDate);
+    return { date: input.nextDate, switched: true };
   }
-  const saved = await readFlush(input.flush);
-  if (!saved.ok) {
-    return {
-      date: input.currentDate,
-      switched: false,
-      reason: saved.unsaveable ? "unsaveable" : "save_failed",
-    };
-  }
+  const saved = await input.flush();
+  if (!saved) return { date: input.currentDate, switched: false, reason: "save_failed" };
   input.persist(input.nextDate);
   return { date: input.nextDate, switched: true };
-}
-
-/** 保存できないまま移るとき、選んだ日付がまだ範囲内ならそこへ。外れなら東京の今日。 */
-export function sessionDateAfterUnsaveable(next: string, now: Date): string {
-  return isWritableSessionDate(next, now) ? next : tokyoCivilDate(now);
-}
-
-/** 次の東京 0:00 までのミリ秒。ちょうど 0:00 なら次の日まで。 */
-export function msUntilNextTokyoDate(now: Date): number {
-  const tomorrow = addDays(tokyoCivilDate(now), 1);
-  const [year, month, day] = tomorrow.split("-").map(Number);
-  const midnight = Date.UTC(year ?? 1970, (month ?? 1) - 1, day ?? 1) - 9 * 60 * 60 * 1000;
-  return Math.max(0, midnight - now.getTime());
-}
-
-/**
- * 東京の日付が進んで、選んでいた日が窓の外になったときだけ今日へ戻す。
- * 戻す前に未保存の編集を保存する。一時的な失敗では日付を動かさない。
- * date_window のように保存できないときは、捨てて今日へ移し、再試行しない。
- */
-export async function realignSessionDate(input: {
-  selected: string;
-  now: Date;
-  flush: () => Promise<boolean | FlushResult>;
-  persist: (date: string) => void;
-}): Promise<{ date: string; notice: string | null; changed: boolean; dropped: boolean }> {
-  if (isWritableSessionDate(input.selected, input.now)) {
-    return { date: input.selected, notice: null, changed: false, dropped: false };
-  }
-  const saved = await readFlush(input.flush);
-  if (!saved.ok && !saved.unsaveable) {
-    return { date: input.selected, notice: null, changed: false, dropped: false };
-  }
-  const today = tokyoCivilDate(input.now);
-  input.persist(today);
-  if (!saved.ok) {
-    return { date: today, notice: SESSION_DATE_UNSAVEABLE_NOTICE, changed: true, dropped: true };
-  }
-  return { date: today, notice: SESSION_DATE_OUT_OF_RANGE_NOTICE, changed: true, dropped: false };
-}
-
-/** 記録画面の下書きがあるあいだ、自動の日付変更を数で止める。 */
-export function createDateChangeHold() {
-  let count = 0;
-  return {
-    hold() {
-      count += 1;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        count = Math.max(0, count - 1);
-      };
-    },
-    held() {
-      return count > 0;
-    },
-  };
 }
 
 /** DayPlan の応答を、その日付のメニューとして使う。finished は日付ごとに別。 */

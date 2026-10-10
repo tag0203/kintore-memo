@@ -8,25 +8,16 @@ import {
 } from "./data/exerciseName";
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
-import { tokyoCivilDate } from "./domain";
 import {
   SESSION_DATE_SAVE_FAILED,
-  SESSION_DATE_UNSAVEABLE_NOTICE,
-  createDateChangeHold,
-  isWritableSessionDate,
   menuFromDayPlan,
-  msUntilNextTokyoDate,
-  outOfWindowSelectionNotice,
-  tokyoTodayAdvance,
   readStoredSessionDate,
-  realignSessionDate,
   recallMenu,
   resolveStoredSessionDate,
-  sessionDateAfterUnsaveable,
   storeMenu,
   switchSessionDate,
   writeStoredSessionDate,
-  type FlushResult,
+  type DateSwitchChoice,
   type SessionDateStorage,
   type SessionMenu,
 } from "./sessionDate";
@@ -82,22 +73,20 @@ export function removalSnapshot(
 
 interface Session {
   date: string;
-  /** 東京の今日。日付の選択肢はここから決める。 */
-  today: string;
-  /** 保存していた日付が窓の外だったときだけ入る */
-  dateNotice: string | null;
   memo: string;
   exercises: string[];
   finished: boolean;
-  /** 永続化に失敗したときだけ入る。モック経路では null */
+  /** 永続化に失敗したときだけ入る。画面には短い文言だけ出す */
   saveError: string | null;
-  /** 東京の前日・当日・翌日だけ。切り替える前に、入力途中の DayPlan を flush する。 */
-  setDate: (date: string) => Promise<void>;
+  /** 未保存の DayPlan がある。日付を変える前に、破棄するか送るかを選ぶ。 */
+  hasUnsavedEdits: () => boolean;
+  /**
+   * clean: 未保存はない。save: 送れてから切り替える。discard: 送らずに切り替える。
+   * 切り替えが終わるまで dateBusy。
+   */
+  setDate: (date: string, choice: DateSwitchChoice) => Promise<void>;
   /** 日付の保存待ち。このあいだ日付の選択は押せない。 */
   dateBusy: boolean;
-  /** 記録画面を開いているあいだ、深夜の自動切替えを止める。戻した関数で解除する。 */
-  holdAutomaticDateChange: () => () => void;
-  dismissDateNotice: () => void;
   setMemo: (memo: string) => void;
   addExercise: (name: string) => AddExerciseResult;
   /**
@@ -142,17 +131,15 @@ export function SessionProvider({
   now?: () => Date;
   dateStorage?: SessionDateStorage;
 }) {
-  const [boot] = useState(() => resolveStoredSessionDate(readStoredSessionDate(dateStorage), now()));
-  const [date, setDateState] = useState(boot.date);
-  const [tokyoToday, setTokyoToday] = useState(() => tokyoCivilDate(now()));
-  const [dateNotice, setDateNotice] = useState<string | null>(boot.notice);
+  const [bootDate] = useState(() => resolveStoredSessionDate(readStoredSessionDate(dateStorage), now()));
+  const [date, setDateState] = useState(bootDate);
   const [dateBusy, setDateBusy] = useState(false);
   const seed = initialMenu(dayPlan != null);
   const [memo, setMemoState] = useState(seed.memo);
   const [exercises, setExercises] = useState<string[]>(seed.exercises);
   const [finished, setFinished] = useState(false);
   /** DayPlan を読むあいだは null。モックは選んだ日付のメニューが state に入っている。 */
-  const [menuDate, setMenuDate] = useState<string | null>(dayPlan ? null : boot.date);
+  const [menuDate, setMenuDate] = useState<string | null>(dayPlan ? null : bootDate);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">(dayPlan ? "loading" : "ready");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -164,22 +151,6 @@ export function SessionProvider({
   menuRef.current = { memo, exercises, finished };
   const localMenus = useRef(new Map<string, SessionMenu>());
   const switching = useRef(false);
-  const nowRef = useRef(now);
-  nowRef.current = now;
-  const phaseRef = useRef(phase);
-  phaseRef.current = phase;
-  const tokyoTodayRef = useRef(tokyoToday);
-  tokyoTodayRef.current = tokyoToday;
-  const dateHold = useRef(createDateChangeHold());
-  const holdAutomaticDateChange = useCallback(() => dateHold.current.hold(), []);
-
-  const publishTokyoToday = useCallback((at: Date) => {
-    const advanced = tokyoTodayAdvance(tokyoTodayRef.current, at);
-    if (!advanced.advanced) return advanced;
-    tokyoTodayRef.current = advanced.today;
-    setTokyoToday(advanced.today);
-    return advanced;
-  }, []);
 
   const saver = useMemo(() => {
     if (!dayPlan) return null;
@@ -191,11 +162,6 @@ export function SessionProvider({
 
   const saverRef = useRef(saver);
   saverRef.current = saver;
-
-  useEffect(() => {
-    if (!boot.notice) return;
-    writeStoredSessionDate(dateStorage, boot.date);
-  }, [boot.date, boot.notice, dateStorage]);
 
   useEffect(() => {
     if (!saver) return;
@@ -237,16 +203,16 @@ export function SessionProvider({
     saver.schedule({ date, memo, exercises, finished });
   }, [phase, saver, date, memo, exercises, finished, menuDate]);
 
-  const flushPending = useCallback(async (): Promise<FlushResult> => {
+  const flushPending = useCallback(async () => {
     const saver = saverRef.current;
-    if (!saver) return { ok: true, unsaveable: false };
-    const ok = await saver.flush();
-    return { ok, unsaveable: !ok && saver.unsaveable() };
+    if (!saver) return true;
+    return saver.flush();
   }, []);
 
+  const hasUnsavedEdits = useCallback(() => saverRef.current?.dirty() ?? false, []);
+
   const applySwitchedDate = useCallback(
-    (previous: string, next: string, notice: string | null) => {
-      setDateNotice(notice);
+    (previous: string, next: string) => {
       if (dayPlan) {
         // 読み込みが終わるまで、前のメニューを新しい日付へ保存しない。
         setMenuDate(null);
@@ -268,27 +234,10 @@ export function SessionProvider({
     [dayPlan],
   );
 
-  const dropUnsaveable = useCallback(
-    (previous: string, next: string, at: Date) => {
-      saverRef.current?.dropPending();
-      const target = sessionDateAfterUnsaveable(next, at);
-      writeStoredSessionDate(dateStorage, target);
-      applySwitchedDate(previous, target, SESSION_DATE_UNSAVEABLE_NOTICE);
-    },
-    [applySwitchedDate, dateStorage],
-  );
-
   const setDate = useCallback(
-    async (next: string) => {
+    async (next: string, choice: DateSwitchChoice) => {
       if (switching.current) return;
-      const at = nowRef.current();
-      publishTokyoToday(at);
       if (next === dateRef.current) return;
-      const blocked = outOfWindowSelectionNotice(next, at);
-      if (blocked) {
-        setDateNotice(blocked);
-        return;
-      }
       const previous = dateRef.current;
       switching.current = true;
       setDateBusy(true);
@@ -296,34 +245,25 @@ export function SessionProvider({
         const result = await switchSessionDate({
           currentDate: previous,
           nextDate: next,
-          now: nowRef.current(),
+          choice,
           flush: flushPending,
+          discard: () => saverRef.current?.dropPending(),
           persist: (value) => writeStoredSessionDate(dateStorage, value),
         });
         if (!result.switched) {
-          if (result.reason === "unsaveable") {
-            dropUnsaveable(previous, next, nowRef.current());
-            return;
-          }
           if (result.reason === "save_failed") {
             setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
           }
-          if (result.reason === "out_of_window") {
-            publishTokyoToday(nowRef.current());
-            setDateNotice(outOfWindowSelectionNotice(next, nowRef.current()));
-          }
           return;
         }
-        applySwitchedDate(previous, result.date, null);
+        applySwitchedDate(previous, result.date);
       } finally {
         switching.current = false;
         setDateBusy(false);
       }
     },
-    [applySwitchedDate, dateStorage, dropUnsaveable, flushPending, publishTokyoToday],
+    [applySwitchedDate, dateStorage, flushPending],
   );
-
-  const dismissDateNotice = useCallback(() => setDateNotice(null), []);
 
   useEffect(() => {
     if (!saver) return;
@@ -343,78 +283,6 @@ export function SessionProvider({
   }, [saver]);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer = 0;
-    let checking = false;
-
-    const schedule = (delay: number) => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        void tick();
-      }, delay);
-    };
-
-    const tick = async () => {
-      if (cancelled || checking) return;
-      checking = true;
-      let nextDelay = 1000;
-      let realigning = false;
-      try {
-        if (switching.current || phaseRef.current === "loading") return;
-        if (phaseRef.current !== "ready") {
-          nextDelay = Math.max(msUntilNextTokyoDate(nowRef.current()), 1000);
-          return;
-        }
-        const previous = dateRef.current;
-        const at = nowRef.current();
-        publishTokyoToday(at);
-        if (!isWritableSessionDate(previous, at)) {
-          if (dateHold.current.held()) {
-            nextDelay = 1000;
-            return;
-          }
-          realigning = true;
-          switching.current = true;
-          setDateBusy(true);
-          const outcome = await realignSessionDate({
-            selected: previous,
-            now: nowRef.current(),
-            flush: flushPending,
-            persist: (value) => writeStoredSessionDate(dateStorage, value),
-          });
-          if (cancelled || dateRef.current !== previous) return;
-          if (outcome.dropped) saverRef.current?.dropPending();
-          if (!outcome.changed) {
-            setSaveError((current) => current ?? SESSION_DATE_SAVE_FAILED);
-            nextDelay = 30_000;
-            return;
-          }
-          applySwitchedDate(previous, outcome.date, outcome.notice);
-        }
-        nextDelay = Math.max(msUntilNextTokyoDate(nowRef.current()), 1000);
-      } finally {
-        if (realigning) {
-          switching.current = false;
-          setDateBusy(false);
-        }
-        checking = false;
-        if (!cancelled) schedule(nextDelay);
-      }
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void tick();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    schedule(Math.max(msUntilNextTokyoDate(nowRef.current()), 1000));
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [applySwitchedDate, dateStorage, flushPending, publishTokyoToday]);
-
-  useEffect(() => {
     if (!saver) return;
     return registerBeforeSignOut(async () => {
       await saver.flush();
@@ -429,12 +297,9 @@ export function SessionProvider({
     };
     return {
       date,
-      today: tokyoToday,
-      dateNotice,
-      dismissDateNotice,
+      hasUnsavedEdits,
       setDate,
       dateBusy,
-      holdAutomaticDateChange,
       memo,
       exercises,
       finished,
@@ -475,7 +340,7 @@ export function SessionProvider({
         publish({ memo, exercises, finished: false }, true);
       },
     };
-  }, [date, dateBusy, dateNotice, dismissDateNotice, exercises, finished, holdAutomaticDateChange, memo, menuDate, saveError, saver, setDate, tokyoToday]);
+  }, [date, dateBusy, exercises, finished, hasUnsavedEdits, memo, menuDate, saveError, saver, setDate]);
 
   if (phase === "loading") {
     return (

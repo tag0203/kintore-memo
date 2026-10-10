@@ -98,7 +98,7 @@ describe("createHttpDayPlanClient", () => {
     }
   });
 
-  it("hides upstream text on a storage failure and shows requestId", async () => {
+  it("hides upstream text and request ids on a storage failure", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(
@@ -119,7 +119,8 @@ describe("createHttpDayPlanClient", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(DayPlanRequestError);
       const fault = error as DayPlanRequestError;
-      expect(fault.message).toBe("メニューの保存先に接続できませんでした（K1x7Ejy1iYcEJew=）");
+      expect(fault.message).toBe("メニューの保存先に接続できませんでした");
+      expect(fault.message).not.toContain("K1x7Ejy1iYcEJew=");
       expect(fault.code).toBe("storage");
       expect(fault.message).not.toContain("arn:");
       expect(fault.message).not.toContain("123456789012");

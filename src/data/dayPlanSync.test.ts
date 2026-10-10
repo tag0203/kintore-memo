@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DayPlanRequestError, type DayPlanInput } from "./dayPlanClient";
-import { createDayPlanSaver } from "./dayPlanSync";
+import { DAY_PLAN_SAVE_ERROR, createDayPlanSaver } from "./dayPlanSync";
 
 function plan(memo: string, extras: Partial<DayPlanInput> = {}): DayPlanInput {
   return {
@@ -119,7 +119,7 @@ describe("createDayPlanSaver", () => {
     });
     saver.schedule(plan("脚"));
     await expect(saver.flush()).resolves.toBe(false);
-    expect(errors).toEqual(["メニューの保存先に接続できませんでした"]);
+    expect(errors).toEqual([DAY_PLAN_SAVE_ERROR]);
     expect(save).toHaveBeenCalledWith(plan("脚"));
     fail = false;
     saver.schedule(plan("胸"));
@@ -138,20 +138,23 @@ describe("createDayPlanSaver", () => {
     await expect(saver.flush()).resolves.toBe(false);
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenLastCalledWith(plan("脚"));
-    expect(saver.unsaveable()).toBe(false);
+    expect(saver.dirty()).toBe(false);
   });
 
-  it("treats date_window as unsaveable and dropPending stops another send", async () => {
+  it("drops an unsaved snapshot without sending it again", async () => {
     const save = vi.fn(async () => {
       throw new DayPlanRequestError("その日付のメニューは保存できません", 400, "date_window");
     });
+    const errors: string[] = [];
     const saver = createDayPlanSaver(save, { waitMs: 10_000 });
+    saver.setListeners({ onError: (message) => errors.push(message) });
     saver.markSaved(plan(""));
     saver.schedule(plan("脚", { date: "2026-10-01" }));
+    expect(saver.dirty()).toBe(true);
     await expect(saver.flush()).resolves.toBe(false);
-    expect(saver.unsaveable()).toBe(true);
+    expect(errors).toEqual([DAY_PLAN_SAVE_ERROR]);
     saver.dropPending();
-    expect(saver.unsaveable()).toBe(false);
+    expect(saver.dirty()).toBe(false);
     await expect(saver.flush()).resolves.toBe(true);
     expect(save).toHaveBeenCalledOnce();
   });

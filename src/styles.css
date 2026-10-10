@@ -515,6 +515,7 @@ button, input { appearance: none; }
 .modal h2 { margin: 0; font-size: 18px; }
 .modal p { margin: 10px 0 0; color: #555; font-size: 14px; line-height: 1.6; }
 .modal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
+.modal-actions.is-stack { grid-template-columns: 1fr; }
 
 @media (hover: hover) {
   .exercise-card:hover { border-color: #c5d8fb; }

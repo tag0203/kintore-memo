@@ -1,9 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { Modal } from "../components/Modal";
 import type { ExerciseLog } from "../domain";
-import { formatJapaneseDate } from "../domain";
-import { SESSION_DATE_NOT_SELECTABLE, SESSION_DATE_OUT_OF_RANGE_NOTICE, tokyoTodayAdvance } from "../sessionDate";
 import { SessionDatePicker, TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
@@ -71,10 +70,8 @@ describe("SessionDatePicker", () => {
         date: "2026-10-02",
         choices,
         open: true,
-        notice: null,
         onToggle: vi.fn(),
         onSelect: vi.fn(),
-        onDismissNotice: vi.fn(),
       }),
     );
     expect(html).toContain("2026/10/2");
@@ -87,56 +84,40 @@ describe("SessionDatePicker", () => {
     expect(html).not.toContain("<style");
   });
 
-  it("shows the out-of-range notice on screen", () => {
-    const html = renderToStaticMarkup(
-      createElement(SessionDatePicker, {
-        date: "2026-10-02",
-        choices,
-        open: false,
-        notice: SESSION_DATE_OUT_OF_RANGE_NOTICE,
-        onToggle: vi.fn(),
-        onSelect: vi.fn(),
-        onDismissNotice: vi.fn(),
-      }),
-    );
-    expect(html).toContain(SESSION_DATE_OUT_OF_RANGE_NOTICE);
-    expect(html).toContain("閉じる");
-    expect(html).not.toContain('class="date-choices"');
-  });
-
-  it("redraws choices from the new Tokyo today while the selected date stays in range", () => {
-    const advanced = tokyoTodayAdvance("2026-10-02", new Date("2026-10-02T15:30:00.000Z"));
-    const html = renderToStaticMarkup(
-      createElement(SessionDatePicker, {
-        date: "2026-10-02",
-        choices: advanced.choices,
-        open: true,
-        notice: SESSION_DATE_NOT_SELECTABLE,
-        onToggle: vi.fn(),
-        onSelect: vi.fn(),
-        onDismissNotice: vi.fn(),
-      }),
-    );
-    expect(html).toContain(formatJapaneseDate("2026-10-04"));
-    expect(html).toContain("翌日");
-    expect(html).not.toContain(formatJapaneseDate("2026-10-01"));
-    expect(html).toContain(SESSION_DATE_NOT_SELECTABLE);
-  });
-
   it("disables the choices while a date switch is saving", () => {
     const html = renderToStaticMarkup(
       createElement(SessionDatePicker, {
         date: "2026-10-02",
         choices,
         open: true,
-        notice: null,
         busy: true,
         onToggle: vi.fn(),
         onSelect: vi.fn(),
-        onDismissNotice: vi.fn(),
       }),
     );
     expect(html.match(/disabled/g)?.length).toBe(4);
+  });
+});
+
+describe("date switch choice", () => {
+  it("offers discard or send before leaving unsaved edits", () => {
+    const html = renderToStaticMarkup(
+      createElement(Modal, {
+        titleId: "date-switch-title",
+        title: "日付を切り替えますか？",
+        body: "この日付の変更はまだ送られていません。",
+        cancelLabel: "キャンセル",
+        alternateLabel: "破棄して切り替える",
+        confirmLabel: "送信して切り替える",
+        onCancel: vi.fn(),
+        onAlternate: vi.fn(),
+        onConfirm: vi.fn(),
+      }),
+    );
+    expect(html).toContain("破棄して切り替える");
+    expect(html).toContain("送信して切り替える");
+    expect(html).toContain("キャンセル");
+    expect(html).not.toContain("<style");
   });
 });
 

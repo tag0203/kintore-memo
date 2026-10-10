@@ -1,5 +1,7 @@
 import { DayPlanRequestError, type DayPlanInput } from "./dayPlanClient";
 
+export const DAY_PLAN_SAVE_ERROR = "保存できませんでした";
+
 export const DAY_PLAN_SAVE_WAIT_MS = 400;
 
 interface DayPlanSaverListeners {
@@ -36,13 +38,7 @@ export function createDayPlanSaver(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let latest: DayPlanInput | null = null;
   let savedKey = "";
-  /** 同じ内容を再送しても成功しない。date_window だけ。オフラインなどは false。 */
-  let rejected = false;
   let chain: Promise<boolean> = Promise.resolve(true);
-
-  function isDateWindow(error: unknown): boolean {
-    return error instanceof DayPlanRequestError && error.code === "date_window";
-  }
 
   function isCurrentSaved(): boolean {
     return latest == null || fingerprint(latest) === savedKey;
@@ -58,15 +54,14 @@ export function createDayPlanSaver(
       await save(input);
       if (latest && fingerprint(latest) === key) {
         savedKey = key;
-        rejected = false;
         listeners.onSaved?.();
       }
       return true;
     } catch (error) {
       if (latest && fingerprint(latest) === key) {
-        rejected = isDateWindow(error);
-        const message = error instanceof Error ? error.message : "メニューを保存できませんでした";
-        listeners.onError?.(message);
+        const code = error instanceof DayPlanRequestError ? error.code : "error";
+        console.error("day plan save failed", code);
+        listeners.onError?.(DAY_PLAN_SAVE_ERROR);
       }
       return false;
     }
@@ -95,7 +90,6 @@ export function createDayPlanSaver(
   return {
     schedule(input: DayPlanInput) {
       latest = snapshot(input);
-      rejected = false;
       if (fingerprint(latest) === savedKey) {
         if (timer) {
           clearTimeout(timer);
@@ -113,25 +107,23 @@ export function createDayPlanSaver(
     markSaved(input: DayPlanInput) {
       latest = snapshot(input);
       savedKey = fingerprint(latest);
-      rejected = false;
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
     },
     flush,
-    /** 直前の flush が date_window で失敗し、そのスナップショットがまだ残っている。 */
-    unsaveable() {
-      return rejected && latest != null && fingerprint(latest) !== savedKey;
+    /** まだ送っていない変更がある。 */
+    dirty() {
+      return latest != null && fingerprint(latest) !== savedKey;
     },
-    /** 保存できないスナップショットを捨て、再送しない。 */
+    /** 未送信の変更を捨てる。送らずに日付を変えるとき。 */
     dropPending() {
       if (timer) {
         clearTimeout(timer);
         timer = null;
       }
       latest = null;
-      rejected = false;
     },
     /** Drop a debounce timer. Does not abort a save that flush() already started. */
     cancel() {
