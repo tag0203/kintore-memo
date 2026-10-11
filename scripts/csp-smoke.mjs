@@ -90,6 +90,47 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Chrome がプロファイルを離すまで待つ。終了前に消すと rmdir が ENOTEMPTY になる。 */
+export function stopChrome(child) {
+  return new Promise((resolve) => {
+    if (child.exitCode != null || child.signalCode != null) {
+      resolve(undefined);
+      return;
+    }
+    child.once("exit", () => resolve(undefined));
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      if (child.exitCode != null || child.signalCode != null) resolve(undefined);
+    }
+  });
+}
+
+/**
+ * ブラウザ終了後にプロファイルを消す。
+ * 削除の失敗だけではスモークを失敗にしない。
+ * @param {string} dir
+ * @param {typeof rm} [remove]
+ */
+export async function removeSmokeDir(dir, remove = rm) {
+  try {
+    await remove(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.warn("CSP smoke cleanup failed:", detail);
+  }
+}
+
+/**
+ * @param {import("node:child_process").ChildProcess} child
+ * @param {string} dir
+ * @param {typeof rm} [remove]
+ */
+export async function cleanupSmokeBrowser(child, dir, remove = rm) {
+  await stopChrome(child);
+  await removeSmokeDir(dir, remove);
+}
+
 /**
  * @param {number} port
  */
@@ -294,9 +335,8 @@ async function main() {
     if (chromeErr.trim()) console.error(chromeErr.trim().slice(-1000));
     throw error;
   } finally {
-    chrome.kill("SIGKILL");
     server.close();
-    await rm(userDataDir, { recursive: true, force: true });
+    await cleanupSmokeBrowser(chrome, userDataDir);
   }
 }
 

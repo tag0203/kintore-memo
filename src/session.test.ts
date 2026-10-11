@@ -3,7 +3,7 @@ import { DAY_PLAN_EXERCISE_LIMIT, type DayPlanInput } from "./data/dayPlanClient
 import { createDayPlanSaver } from "./data/dayPlanSync";
 import { DAY_PLAN_EXERCISE_NAME_LIMIT } from "./data/exerciseName";
 import { INITIAL_MEMO, INITIAL_PLAN } from "./data/seed";
-import { initialMenu, nextExerciseList, removalSnapshot, withoutExercise } from "./session";
+import { exerciseMenuLimit, initialMenu, nextExerciseList, removalSnapshot, withoutExercise } from "./session";
 
 describe("initialMenu", () => {
   it("keeps the mock seed when DayPlan is not configured", () => {
@@ -12,6 +12,13 @@ describe("initialMenu", () => {
 
   it("starts empty when the API will restore a DayPlan", () => {
     expect(initialMenu(true)).toEqual({ memo: "", exercises: [] });
+  });
+});
+
+describe("exerciseMenuLimit", () => {
+  it("is open for the mock and capped when a DayPlan is saved", () => {
+    expect(exerciseMenuLimit(false)).toBeNull();
+    expect(exerciseMenuLimit(true)).toBe(DAY_PLAN_EXERCISE_LIMIT);
   });
 });
 

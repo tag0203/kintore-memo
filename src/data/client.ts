@@ -15,6 +15,6 @@ export interface WorkoutLogClient {
   getLogOnDate(exercise: string, date: string): Promise<ExerciseLog[]>;
   /** 追記のみ。既存行は更新しない。 */
   createLog(input: NewExerciseLog): Promise<ExerciseLog>;
-  /** ピッカーで選んだ順を更新する。未知の名前ならカタログに足す。onDate はそのセッション日。 */
+  /** 保存した種目の「最近」順を更新する。未知の名前ならカタログに足す。onDate はそのセッション日。 */
   touchExercise(name: string, atISO: string, onDate?: string): Promise<ExerciseSummary>;
 }

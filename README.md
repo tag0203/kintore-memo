@@ -102,7 +102,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | 当日 | その日のその種目の行をすべて。先の行は後からの保存で消さない |
 | 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の DayPlan 1 項目。Go API の `GET` / `PUT /api/day-plan`（[docs/dynamodb.md](docs/dynamodb.md)、[#6](https://github.com/tag0203/kintore-memo/issues/6)）。Cognito と API URL が無いローカルだけブラウザのメモリ |
 
-モックの「最近」は、ピッカーで選んだ順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
+モックの「最近」は、記録を保存した順です（初期並びは画面案に合わせています）。Worker 側の「最近」は、記録日が新しい順です。
 
 ## シークレット
 

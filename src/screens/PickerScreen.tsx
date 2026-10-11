@@ -9,7 +9,29 @@ import {
 } from "../data/exerciseName";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
-import { useSession } from "../session";
+import { nextExerciseList, useSession } from "../session";
+
+export type ExerciseChoice =
+  | { type: "ignore" }
+  | { type: "error"; message: string }
+  | { type: "record"; exercise: string };
+
+/** 選んだ種目で記録画面を開く判断だけ。メニューには足さない。 */
+export function exerciseChoice(
+  name: string,
+  exercises: readonly string[],
+  limit: number | null,
+): ExerciseChoice {
+  const trimmed = name.trim();
+  if (!trimmed) return { type: "ignore" };
+  const issue = dayPlanExerciseNameIssue(trimmed);
+  if (issue === "too_long") return { type: "error", message: DAY_PLAN_EXERCISE_TOO_LONG };
+  if (issue) return { type: "error", message: DAY_PLAN_EXERCISE_INVALID };
+  if (nextExerciseList(exercises, trimmed, limit).result === "too_many") {
+    return { type: "error", message: DAY_PLAN_TOO_MANY_EXERCISES };
+  }
+  return { type: "record", exercise: trimmed };
+}
 
 export function PickerScreen({
   navigate,
@@ -41,30 +63,18 @@ export function PickerScreen({
     ? exercises.filter((exercise) => exercise.name.includes(normalized))
     : exercises;
 
-  async function choose(name: string) {
-    const trimmed = name.trim();
-    if (!trimmed || busy) return;
+  function choose(name: string) {
+    if (busy) return;
+    const choice = exerciseChoice(name, session.exercises, session.exerciseLimit);
+    if (choice.type === "ignore") return;
     setBusy(true);
     setError(null);
-    const issue = dayPlanExerciseNameIssue(trimmed);
-    if (issue) {
-      setError(issue === "too_long" ? DAY_PLAN_EXERCISE_TOO_LONG : DAY_PLAN_EXERCISE_INVALID);
+    if (choice.type === "error") {
+      setError(choice.message);
       setBusy(false);
       return;
     }
-    try {
-      await client.touchExercise(trimmed, new Date().toISOString(), session.date);
-      const added = session.addExercise(trimmed);
-      if (added === "too_many") {
-        setError(DAY_PLAN_TOO_MANY_EXERCISES);
-        setBusy(false);
-        return;
-      }
-      navigate({ screen: "record", exercise: trimmed });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "追加できませんでした");
-      setBusy(false);
-    }
+    navigate({ screen: "record", exercise: choice.exercise });
   }
 
   function onAdd(event: FormEvent) {
@@ -121,7 +131,7 @@ export function PickerScreen({
           </div>
           <div className="chip-row">
             {visibleRecent.map((exercise) => (
-              <button key={exercise.name} type="button" className="chip" onClick={() => void choose(exercise.name)}>
+              <button key={exercise.name} type="button" className="chip" onClick={() => choose(exercise.name)}>
                 {exercise.name}
               </button>
             ))}
@@ -143,7 +153,7 @@ export function PickerScreen({
                     <button
                       type="button"
                       className={inPlan ? "exercise-row is-in-plan" : "exercise-row"}
-                      onClick={() => void choose(exercise.name)}
+                      onClick={() => choose(exercise.name)}
                     >
                       <Icon>
                         <DumbbellIcon />
