@@ -5,14 +5,14 @@ import { exerciseChoice } from "./PickerScreen";
 import { persistRecordedExercise } from "./RecordScreen";
 
 describe("persistRecordedExercise", () => {
-  it("adds the exercise and touches it on that session date after the log is saved", async () => {
+  it("adds the exercise and touches it with the saved log's createdAt", async () => {
     const order: string[] = [];
     await persistRecordedExercise({
       exercise: "ベンチプレス",
       date: "2026-10-09",
-      atISO: "2026-10-09T12:00:00.000Z",
       createLog: async () => {
         order.push("log");
+        return { createdAt: "2026-10-09T03:04:05.000Z" };
       },
       addExercise: (name) => {
         order.push(`add:${name}`);
@@ -24,7 +24,7 @@ describe("persistRecordedExercise", () => {
     expect(order).toEqual([
       "log",
       "add:ベンチプレス",
-      "touch:ベンチプレス:2026-10-09T12:00:00.000Z:2026-10-09",
+      "touch:ベンチプレス:2026-10-09T03:04:05.000Z:2026-10-09",
     ]);
   });
 
@@ -35,7 +35,6 @@ describe("persistRecordedExercise", () => {
       persistRecordedExercise({
         exercise: "ベンチプレス",
         date: "2026-10-10",
-        atISO: "2026-10-10T00:00:00.000Z",
         createLog: async () => {
           throw new Error("保存に失敗しました");
         },
@@ -55,8 +54,7 @@ describe("persistRecordedExercise", () => {
       persistRecordedExercise({
         exercise: "スクワット",
         date: "2026-10-08",
-        atISO: "2026-10-08T01:00:00.000Z",
-        createLog: async () => {},
+        createLog: async () => ({ createdAt: "2026-10-08T01:00:00.000Z" }),
         addExercise,
         touchExercise: async () => {
           throw reason;
@@ -77,8 +75,7 @@ describe("persistRecordedExercise", () => {
     await persistRecordedExercise({
       exercise: "スクワット",
       date: "2026-10-10",
-      atISO: "2026-10-10T00:00:00.000Z",
-      createLog: async () => {},
+      createLog: async () => ({ createdAt: "2026-10-10T00:00:00.000Z" }),
       addExercise: (name) => {
         const decision = nextExerciseList(menu, name, DAY_PLAN_EXERCISE_LIMIT);
         if (decision.result === "added") menu = decision.exercises;
@@ -97,8 +94,7 @@ describe("persistRecordedExercise", () => {
     await persistRecordedExercise({
       exercise: "ベンチプレス",
       date: "2026-10-10",
-      atISO: "2026-10-10T00:00:00.000Z",
-      createLog: async () => {},
+      createLog: async () => ({ createdAt: "2026-10-10T08:00:00.000Z" }),
       addExercise: (name) => {
         const decision = nextExerciseList(menu, name, DAY_PLAN_EXERCISE_LIMIT);
         if (decision.result === "added") menu = decision.exercises;

@@ -38,20 +38,20 @@ const emptyDraft: Draft = { weight: "", reps: "", sets: "", difficulty: null };
 
 /**
  * 記録の保存が成功したあとに、その日のメニューへ足し、「最近」を更新する。
+ * 時刻は createLog が返した createdAt。端末時計では上書きしない。
  * touch が失敗しても記録自体は成功のまま。詳細はコンソールに残す。
  */
 export async function persistRecordedExercise(input: {
   exercise: string;
   date: string;
-  atISO: string;
-  createLog: () => Promise<unknown>;
+  createLog: () => Promise<{ createdAt: string }>;
   addExercise: (name: string) => void;
   touchExercise: (name: string, atISO: string, onDate: string) => Promise<unknown>;
 }): Promise<void> {
-  await input.createLog();
+  const saved = await input.createLog();
   input.addExercise(input.exercise);
   try {
-    await input.touchExercise(input.exercise, input.atISO, input.date);
+    await input.touchExercise(input.exercise, saved.createdAt, input.date);
   } catch (reason) {
     console.error("touch exercise failed", reason);
   }
@@ -128,7 +128,6 @@ export function RecordScreen({
       await persistRecordedExercise({
         exercise,
         date: session.date,
-        atISO: new Date().toISOString(),
         createLog: () =>
           client.createLog({
             exercise,
