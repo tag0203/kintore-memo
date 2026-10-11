@@ -36,6 +36,27 @@ function draftFromLog(log: ExerciseLog): Draft {
 
 const emptyDraft: Draft = { weight: "", reps: "", sets: "", difficulty: null };
 
+/**
+ * 記録の保存が成功したあとに、その日のメニューへ足し、「最近」を更新する。
+ * 時刻は createLog が返した createdAt。端末時計では上書きしない。
+ * touch が失敗しても記録自体は成功のまま。詳細はコンソールに残す。
+ */
+export async function persistRecordedExercise(input: {
+  exercise: string;
+  date: string;
+  createLog: () => Promise<{ createdAt: string }>;
+  addExercise: (name: string) => void;
+  touchExercise: (name: string, atISO: string, onDate: string) => Promise<unknown>;
+}): Promise<void> {
+  const saved = await input.createLog();
+  input.addExercise(input.exercise);
+  try {
+    await input.touchExercise(input.exercise, saved.createdAt, input.date);
+  } catch (reason) {
+    console.error("touch exercise failed", reason);
+  }
+}
+
 export function RecordScreen({
   exercise,
   navigate,
@@ -97,22 +118,31 @@ export function RecordScreen({
     const weightKg = parseWeight(draft.weight);
     const reps = parseCount(draft.reps);
     const sets = parseCount(draft.sets);
-    if (weightKg == null || reps == null || sets == null || draft.difficulty == null) {
+    const difficulty = draft.difficulty;
+    if (weightKg == null || reps == null || sets == null || difficulty == null) {
       setError("重量・回数・セット・きつさを入力してください");
       return;
     }
     setSaving(true);
     try {
-      await client.createLog({
+      await persistRecordedExercise({
         exercise,
-        weightKg,
-        reps,
-        sets,
-        difficulty: draft.difficulty,
         date: session.date,
-        title: PAGE_TITLE,
+        createLog: () =>
+          client.createLog({
+            exercise,
+            weightKg,
+            reps,
+            sets,
+            difficulty,
+            date: session.date,
+            title: PAGE_TITLE,
+          }),
+        addExercise: (name) => {
+          session.addExercise(name);
+        },
+        touchExercise: (name, atISO, onDate) => client.touchExercise(name, atISO, onDate),
       });
-      session.addExercise(exercise);
       navigate({ screen: "today" });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "保存できませんでした");

@@ -28,6 +28,11 @@ export type AddExerciseResult = "added" | "present" | "empty" | "too_many" | "in
 /** removed: メニューから外した。absent: その名前は無い。finished: 今日を終了済みなので外さない。 */
 export type RemoveExerciseResult = "removed" | "absent" | "finished";
 
+/** モックは上限なし。DayPlan を保存するときは 40 件で止める。 */
+export function exerciseMenuLimit(persistDayPlan: boolean): number | null {
+  return persistDayPlan ? DAY_PLAN_EXERCISE_LIMIT : null;
+}
+
 /** `limit` が null のときはモック経路。永続化するときは DayPlan の 40 件で止める。名前の禁止文字はどちらも拒否する。 */
 export function nextExerciseList(
   exercises: readonly string[],
@@ -95,6 +100,8 @@ interface Session {
   /** 日付の保存待ち。このあいだ日付の選択は押せない。 */
   dateBusy: boolean;
   setMemo: (memo: string) => void;
+  /** `addExercise` と同じ上限。null はモック（上限なし）。選ぶ時点の事前チェックに使う。 */
+  exerciseLimit: number | null;
   addExercise: (name: string) => AddExerciseResult;
   /**
    * 今日のメニューから種目を外し、追加と同じく publish → saver で exercises 全体を保存する。
@@ -347,8 +354,9 @@ export function SessionProvider({
       finished,
       saveError,
       setMemo: (next) => setMemoState(next.replace(/[\r\n]/g, "")),
+      exerciseLimit: exerciseMenuLimit(saver != null),
       addExercise: (name) => {
-        const decision = nextExerciseList(exercises, name, saver ? DAY_PLAN_EXERCISE_LIMIT : null);
+        const decision = nextExerciseList(exercises, name, exerciseMenuLimit(saver != null));
         if (decision.result === "too_many") {
           setSaveError(DAY_PLAN_TOO_MANY_EXERCISES);
           return decision.result;
