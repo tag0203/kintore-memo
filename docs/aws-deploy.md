@@ -11,7 +11,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 | S3 | SPA 用。パブリックアクセス遮断 |
 | CloudFront + OAC | 非公開バケットを配信。403/404 → `index.html` |
 | API Gateway HTTP API | JWT Authorizer 付き。`GET /api/health` だけ公開。他の `GET` / `POST` / `PUT /api/*` は Authorizer 必須。`OPTIONS` はルートにせず、`CorsConfiguration` が preflight に答える。全ルートのスロットリングは持続 10 rps、バースト 20。アクセスログは下のロググループ |
-| Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）と DayPlan の `GET` / `PUT`（#6）。`worker/` はデプロイしない。予約同時実行は既定で未設定（`ReservedConcurrency=0`） |
+| Lambda | Go（`provided.al2023`、#23）。Notion ラッパー（#10）、DayPlan の `GET` / `PUT`（#6）、下書きの反映（#49）。API 関数に加え、毎日 00:10（Asia/Tokyo）の flush 関数が同じロールで動く。`worker/` はデプロイしない。予約同時実行は既定で未設定（`ReservedConcurrency=0`） |
 | Cognito User Pool + App Client | JWT 発行。自己登録禁止（`AllowAdminCreateUserOnly`）。自前ログイン UI は [aws-auth.md](./aws-auth.md)（#9） |
 | DynamoDB | オンデマンドの単一テーブル。`pk` / `sk` + TTL。エンティティは [dynamodb.md](./dynamodb.md) |
 | SSM SecureString | Notion token / database id（名前と IAM はテンプレート。実体はデプロイ後に CLI で作成。CFN は SecureString を作れない） |

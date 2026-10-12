@@ -205,6 +205,16 @@ button, input { appearance: none; }
   font-weight: 700;
 }
 .plan-remove:active { background: #fff5f6; }
+.draft-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.draft-action {
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+.draft-action.is-danger { color: var(--danger); border-color: #f0c2c8; }
 .exercise-card {
   width: 100%;
   display: flex;

@@ -21,6 +21,7 @@ import (
 	"github.com/tag0203/kintore-memo/api/internal/cache"
 	"github.com/tag0203/kintore-memo/api/internal/dayplan"
 	"github.com/tag0203/kintore-memo/api/internal/ddb"
+	"github.com/tag0203/kintore-memo/api/internal/draft"
 	"github.com/tag0203/kintore-memo/api/internal/model"
 	"github.com/tag0203/kintore-memo/api/internal/notion"
 	"github.com/tag0203/kintore-memo/api/internal/secrets"
@@ -36,6 +37,7 @@ type Deps struct {
 	Cache       cache.Store
 	NewClient   func(token, databaseID string) notion.Backend
 	DayPlan     dayplan.Store
+	Drafts      draft.Store
 	Parameters  secrets.Getter
 	Dynamo      tableAPI
 }
@@ -48,6 +50,7 @@ type Handler struct {
 	json        *cache.JSON
 	newClient   func(token, databaseID string) notion.Backend
 	dayPlan     dayplan.Store
+	drafts      draft.Store
 	dynamo      tableAPI
 
 	mu       sync.Mutex
@@ -66,6 +69,7 @@ func New(deps Deps) *Handler {
 		loadSecrets: deps.LoadSecrets,
 		newClient:   deps.NewClient,
 		dayPlan:     deps.DayPlan,
+		drafts:      deps.Drafts,
 		dynamo:      deps.Dynamo,
 		services:    map[string]*notion.Service{},
 	}
@@ -91,6 +95,8 @@ func New(deps Deps) *Handler {
 type tableAPI interface {
 	cache.Remote
 	GetConsistent(ctx context.Context, table, pk, sk string, dest any) (bool, error)
+	PutIf(ctx context.Context, table string, item any, previousVersion int, exists bool) error
+	DeleteIf(ctx context.Context, table, pk, sk string, previousVersion int) error
 }
 
 func defaultCache(getenv func(string) string, api cache.Remote, now func() time.Time) cache.Store {
@@ -121,12 +127,53 @@ func (h *Handler) Handle(ctx context.Context, event events.APIGatewayV2HTTPReque
 
 	body, status, err := h.route(ctx, event, method, path)
 	if err != nil {
+		if resp, ok := h.draftHTTPError(ctx, event, err); ok {
+			return resp, nil
+		}
 		return h.notionError(ctx, event, err), nil
+	}
+	if status == 204 {
+		return events.APIGatewayV2HTTPResponse{StatusCode: 204}, nil
 	}
 	if status == 0 {
 		return jsonResponse(404, map[string]string{"error": "見つかりません"}), nil
 	}
 	return jsonResponse(status, body), nil
+}
+
+// HandleFlush is the nightly Lambda. It writes unfinished days that are at
+// least two Tokyo calendar days old. The event is not logged.
+func (h *Handler) HandleFlush(ctx context.Context, _ events.CloudWatchEvent) error {
+	svc, err := h.flushService(ctx)
+	if err != nil {
+		log.Printf("draft flush unavailable %T detail=%s", err, redact(err.Error()))
+		return errors.New("draft flush unavailable")
+	}
+	due, err := svc.Due(ctx, h.now())
+	if err != nil {
+		log.Printf("draft flush list failed %T detail=%s", err, redact(err.Error()))
+		return errors.New("draft flush failed")
+	}
+	failed := 0
+	for _, day := range due {
+		ready, dueErr := ddb.IsAutoFlushDue(day.Date, h.now())
+		if dueErr != nil || !ready {
+			continue
+		}
+		result, flushErr := svc.Flush(ctx, day.UserID, day.Date, h.now(), false)
+		if flushErr != nil || !result.Synced {
+			failed++
+			detail := ""
+			if flushErr != nil {
+				detail = redact(flushErr.Error())
+			}
+			log.Printf("draft flush failed date=%s synced=%t detail=%s", day.Date, result.Synced, detail)
+		}
+	}
+	if failed > 0 {
+		return errors.New("draft flush incomplete")
+	}
+	return nil
 }
 
 func (h *Handler) route(ctx context.Context, event events.APIGatewayV2HTTPRequest, method, path string) (any, int, error) {
@@ -160,6 +207,10 @@ func (h *Handler) route(ctx context.Context, event events.APIGatewayV2HTTPReques
 			return nil, 0, err
 		}
 		body, err := svc.GetPreviousLog(ctx, exercise, before)
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err = h.overlayPrevious(ctx, event, exercise, before, body)
 		return body, 200, err
 	case method == "GET" && path == "/api/logs/today":
 		exercise, err := validate.AssertExerciseName(params.Get("exercise"))
@@ -175,6 +226,25 @@ func (h *Handler) route(ctx context.Context, event events.APIGatewayV2HTTPReques
 			return nil, 0, err
 		}
 		body, err := svc.GetLogOnDate(ctx, exercise, date)
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err = h.overlayToday(ctx, event, exercise, date, body)
+		return body, 200, err
+	case method == "GET" && path == "/api/drafts":
+		date, err := validate.AssertISODate(params.Get("date"), "date")
+		if err != nil {
+			return nil, 0, err
+		}
+		svc, err := h.draftCRUD()
+		if err != nil {
+			return h.draftUnavailable(err)
+		}
+		userID, err := h.requireUser(event)
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err := svc.List(ctx, userID, date, h.now())
 		return body, 200, err
 	case method == "GET" && path == "/api/bootstrap":
 		date, err := validate.AssertISODate(params.Get("date"), "date")
@@ -190,33 +260,106 @@ func (h *Handler) route(ctx context.Context, event events.APIGatewayV2HTTPReques
 			return nil, 0, err
 		}
 		body, err := svc.Bootstrap(ctx, date, names)
+		if err != nil {
+			return nil, 0, err
+		}
+		body, err = h.overlayBootstrap(ctx, event, body)
 		return body, 200, err
 	case method == "POST" && path == "/api/logs":
-		payload, err := readEventJSON(event)
-		if err != nil {
-			return nil, 0, err
-		}
-		input, err := validate.ReadCreateBody(payload)
-		if err != nil {
-			return nil, 0, err
-		}
-		svc, err := h.service(ctx)
-		if err != nil {
-			return nil, 0, err
-		}
-		body, err := svc.CreateLog(ctx, model.NewExerciseLog{
-			Exercise:   input.Exercise,
-			WeightKg:   input.WeightKg,
-			Reps:       input.Reps,
-			Sets:       input.Sets,
-			Difficulty: input.Difficulty,
-			Date:       input.Date,
-			Title:      input.Title,
-		})
-		return body, 201, err
+		return h.createDraft(ctx, event)
+	case method == "PUT" && strings.HasPrefix(path, "/api/logs/"):
+		return h.updateDraft(ctx, event, strings.TrimPrefix(path, "/api/logs/"))
+	case method == "DELETE" && strings.HasPrefix(path, "/api/logs/"):
+		return h.deleteDraft(ctx, event, strings.TrimPrefix(path, "/api/logs/"))
+	case method == "POST" && strings.HasPrefix(path, "/api/day/") && strings.HasSuffix(path, "/finish"):
+		date := strings.TrimSuffix(strings.TrimPrefix(path, "/api/day/"), "/finish")
+		return h.finishDay(ctx, event, date)
 	default:
 		return nil, 0, nil
 	}
+}
+
+func (h *Handler) createDraft(ctx context.Context, event events.APIGatewayV2HTTPRequest) (any, int, error) {
+	payload, err := readEventJSON(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	input, err := validate.ReadCreateBody(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	userID, err := h.requireUser(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	svc, err := h.draftCRUD()
+	if err != nil {
+		return h.draftUnavailable(err)
+	}
+	body, err := svc.Create(ctx, userID, input, h.now())
+	return body, 201, err
+}
+
+func (h *Handler) updateDraft(ctx context.Context, event events.APIGatewayV2HTTPRequest, id string) (any, int, error) {
+	if strings.Contains(id, "/") || id == "" {
+		return nil, 0, nil
+	}
+	payload, err := readEventJSON(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	input, err := validate.ReadCreateBody(payload)
+	if err != nil {
+		return nil, 0, err
+	}
+	svc, err := h.draftCRUD()
+	if err != nil {
+		return h.draftUnavailable(err)
+	}
+	userID, err := h.requireUser(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	body, err := svc.Update(ctx, userID, id, input, h.now())
+	return body, 200, err
+}
+
+func (h *Handler) deleteDraft(ctx context.Context, event events.APIGatewayV2HTTPRequest, id string) (any, int, error) {
+	if strings.Contains(id, "/") || id == "" {
+		return nil, 0, nil
+	}
+	svc, err := h.draftCRUD()
+	if err != nil {
+		return h.draftUnavailable(err)
+	}
+	userID, err := h.requireUser(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := svc.Delete(ctx, userID, id, h.now()); err != nil {
+		return nil, 0, err
+	}
+	return nil, 204, nil
+}
+
+func (h *Handler) finishDay(ctx context.Context, event events.APIGatewayV2HTTPRequest, date string) (any, int, error) {
+	if strings.Contains(date, "/") || date == "" {
+		return nil, 0, nil
+	}
+	checked, err := validate.AssertISODate(date, "日付")
+	if err != nil {
+		return nil, 0, err
+	}
+	svc, err := h.flushService(ctx)
+	if err != nil {
+		return h.draftUnavailable(err)
+	}
+	userID, err := h.requireUser(event)
+	if err != nil {
+		return nil, 0, err
+	}
+	body, err := svc.Flush(ctx, userID, checked, h.now(), true)
+	return body, 200, err
 }
 
 func (h *Handler) handleDayPlan(ctx context.Context, event events.APIGatewayV2HTTPRequest, method string) events.APIGatewayV2HTTPResponse {
@@ -294,6 +437,144 @@ func (h *Handler) dayPlanStore() (dayplan.Store, error) {
 		return nil, errors.New("TABLE_NAME が設定されていません")
 	}
 	return dayplan.NewDynamo(table, h.dynamo), nil
+}
+
+func (h *Handler) optionalDraftStore() (draft.Store, error) {
+	if h.drafts != nil {
+		return h.drafts, nil
+	}
+	table := strings.TrimSpace(h.getenv("TABLE_NAME"))
+	if table == "" || h.dynamo == nil {
+		return nil, nil
+	}
+	return draft.NewDynamo(table, h.dynamo), nil
+}
+
+func (h *Handler) draftCRUD() (*draft.Service, error) {
+	store, err := h.optionalDraftStore()
+	if err != nil || store == nil {
+		if err == nil {
+			err = errors.New("TABLE_NAME が設定されていません")
+		}
+		return nil, err
+	}
+	plans, _ := h.dayPlanStore()
+	return draft.New(store, plans, nil), nil
+}
+
+func (h *Handler) flushService(ctx context.Context) (*draft.Service, error) {
+	store, err := h.optionalDraftStore()
+	if err != nil || store == nil {
+		if err == nil {
+			err = errors.New("TABLE_NAME が設定されていません")
+		}
+		return nil, err
+	}
+	plans, err := h.dayPlanStore()
+	if err != nil {
+		return nil, err
+	}
+	writer, err := h.service(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return draft.New(store, plans, writer), nil
+}
+
+func (h *Handler) draftUnavailable(err error) (any, int, error) {
+	if err != nil && strings.Contains(err.Error(), "TABLE_NAME") {
+		return map[string]string{
+			"error":   "table_unconfigured",
+			"message": "TABLE_NAME がありません",
+		}, 503, nil
+	}
+	return nil, 0, err
+}
+
+func (h *Handler) requireUser(event events.APIGatewayV2HTTPRequest) (string, error) {
+	return ddb.AssertUserID(jwtSubject(event))
+}
+
+func (h *Handler) draftReader(ctx context.Context) (*draft.Service, error) {
+	store, err := h.optionalDraftStore()
+	if err != nil || store == nil {
+		return nil, err
+	}
+	return draft.New(store, nil, nil), nil
+}
+
+func (h *Handler) overlayBootstrap(ctx context.Context, event events.APIGatewayV2HTTPRequest, body model.Bootstrap) (model.Bootstrap, error) {
+	history, ok, err := h.draftHistory(ctx, event, body.Date)
+	if err != nil || !ok {
+		return body, err
+	}
+	if body.Logs == nil {
+		body.Logs = map[string]model.LogPair{}
+	}
+	for name, pair := range body.Logs {
+		pair.Previous = draft.OverlayPrevious(pair.Previous, history.Open, name, body.Date)
+		pair.Today = draft.OverlayToday(pair.Today, history.Session, name)
+		body.Logs[name] = pair
+	}
+	body.DaySynced = history.Synced
+	return body, nil
+}
+
+func (h *Handler) overlayPrevious(ctx context.Context, event events.APIGatewayV2HTTPRequest, exercise, before string, rows []model.ExerciseLog) ([]model.ExerciseLog, error) {
+	history, ok, err := h.draftHistory(ctx, event, before)
+	if err != nil || !ok {
+		return rows, err
+	}
+	return draft.OverlayPrevious(rows, history.Open, exercise, before), nil
+}
+
+func (h *Handler) overlayToday(ctx context.Context, event events.APIGatewayV2HTTPRequest, exercise, date string, rows []model.ExerciseLog) ([]model.ExerciseLog, error) {
+	history, ok, err := h.draftHistory(ctx, event, date)
+	if err != nil || !ok {
+		return rows, err
+	}
+	return draft.OverlayToday(rows, history.Session, exercise), nil
+}
+
+func (h *Handler) draftHistory(ctx context.Context, event events.APIGatewayV2HTTPRequest, date string) (draft.History, bool, error) {
+	reader, err := h.draftReader(ctx)
+	if err != nil || reader == nil {
+		return draft.History{}, false, err
+	}
+	userID, err := ddb.AssertUserID(jwtSubject(event))
+	if err != nil {
+		return draft.History{}, false, nil
+	}
+	history, err := reader.History(ctx, userID, date)
+	if err != nil {
+		return draft.History{}, false, err
+	}
+	return history, true, nil
+}
+
+func (h *Handler) draftHTTPError(ctx context.Context, event events.APIGatewayV2HTTPRequest, err error) (events.APIGatewayV2HTTPResponse, bool) {
+	var conflict draft.ConflictError
+	if errors.As(err, &conflict) {
+		return jsonResponse(409, map[string]string{"error": conflict.Error()}), true
+	}
+	var missing *draft.NotFoundError
+	if errors.As(err, &missing) {
+		return jsonResponse(404, map[string]string{"error": "見つかりません"}), true
+	}
+	var invalid *ddb.ItemValidationError
+	if errors.As(err, &invalid) {
+		if invalid.Code == "user_id" {
+			return jsonResponse(401, map[string]string{"error": "ログインが必要です"}), true
+		}
+		log.Printf("draft rejected code=%s", invalid.Code)
+		return jsonResponse(400, map[string]string{"error": "記録の形式を確認してください"}), true
+	}
+	var stored *draft.StorageError
+	if errors.As(err, &stored) {
+		id := logServerError(ctx, event, "draft failed", err, msgServer)
+		return jsonResponse(502, faultBody(msgServer, id)), true
+	}
+	return events.APIGatewayV2HTTPResponse{}, false
 }
 
 func (h *Handler) service(ctx context.Context) (*notion.Service, error) {

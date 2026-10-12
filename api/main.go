@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -18,8 +19,13 @@ func main() {
 		log.Fatal(err)
 	}
 	awsClient := awsadapter.New(cfg)
-	lambda.Start(httpapi.New(httpapi.Deps{
+	handler := httpapi.New(httpapi.Deps{
 		Parameters: awsClient,
 		Dynamo:     awsClient,
-	}).Handle)
+	})
+	if os.Getenv("HANDLER_MODE") == "flush" {
+		lambda.Start(handler.HandleFlush)
+		return
+	}
+	lambda.Start(handler.Handle)
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
 import { ChevronDownIcon, Icon } from "../components/icons";
@@ -29,6 +29,8 @@ export function TodayExerciseRow({
   dateLabel = "今日",
   onOpen,
   onRemove,
+  onEditDraft,
+  onDeleteDraft,
 }: {
   index: number;
   name: string;
@@ -40,7 +42,13 @@ export function TodayExerciseRow({
   dateLabel?: string;
   onOpen: () => void;
   onRemove: () => void;
+  /** 未反映の下書きだけ。カードの外に置く。 */
+  onEditDraft?: (log: ExerciseLog) => void;
+  onDeleteDraft?: (log: ExerciseLog) => void;
 }) {
+  const drafts = today.filter((log) => log.synced === false);
+  const unsynced = drafts.length > 0;
+  const badgeText = unsynced || today.length === 0 ? "未" : `${today.length}件`;
   return (
     <li className="plan-item">
       <button type="button" className="exercise-card" onClick={onOpen}>
@@ -71,10 +79,23 @@ export function TodayExerciseRow({
             </span>
           )}
         </span>
-        <span className={today.length > 0 ? "badge is-done" : "badge"}>
-          {today.length > 0 ? `${today.length}件` : "未"}
-        </span>
+        <span className={today.length > 0 && !unsynced ? "badge is-done" : "badge"}>{badgeText}</span>
       </button>
+      {drafts.map((log) => (
+        <div key={log.id} className="draft-actions">
+          <button type="button" className="draft-action" onClick={() => onEditDraft?.(log)}>
+            修正
+          </button>
+          <button
+            type="button"
+            className="draft-action is-danger"
+            aria-label={`${name}の下書きを削除`}
+            onClick={() => onDeleteDraft?.(log)}
+          >
+            削除
+          </button>
+        </div>
+      ))}
       {removable && (
         <button type="button" className="plan-remove" aria-label={`${name}を${dateLabel}のメニューから外す`} onClick={onRemove}>
           外す
@@ -143,7 +164,15 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const client = useClient();
   const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
+  const [flushedNotice, setFlushedNotice] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ExerciseLog | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [logsRevision, setLogsRevision] = useState(0);
+  const endingRef = useRef(false);
+  const deletingRef = useRef(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [dateOpen, setDateOpen] = useState(false);
   const [dateChoices, setDateChoices] = useState<SessionDateChoice[]>([]);
@@ -172,7 +201,12 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       }),
     );
     return rows;
-  }, [planKey, session.date, client]);
+  }, [planKey, session.date, client, logsRevision]);
+
+  useEffect(() => {
+    setFlushedNotice(false);
+    setEndError(null);
+  }, [session.date]);
 
   const recordedCount = loaded.data?.filter((row) => row.today.length > 0).length ?? 0;
   const canEditMenu = !session.finished && session.exercises.length > 0;
@@ -185,6 +219,41 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       return;
     }
     session.removeExercise(name);
+  }
+
+  async function confirmFinish() {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEnding(true);
+    setEndError(null);
+    try {
+      await client.finishDay(session.date);
+      setEditing(false);
+      session.finish();
+      setFlushedNotice(true);
+      setConfirmEnd(false);
+      setLogsRevision((value) => value + 1);
+    } catch (reason) {
+      setEndError(reason instanceof Error ? reason.message : "Notion への反映に失敗しました");
+    } finally {
+      endingRef.current = false;
+      setEnding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleteError(null);
+    try {
+      await client.deleteLog(pendingDelete.id);
+      setPendingDelete(null);
+      setLogsRevision((value) => value + 1);
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : "削除に失敗しました");
+    } finally {
+      deletingRef.current = false;
+    }
   }
 
   return (
@@ -226,6 +295,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           <p>
             記録した種目 {recordedCount} / {session.exercises.length}
           </p>
+          {flushedNotice && <p>Notion に反映しました</p>}
         </div>
       )}
 
@@ -289,6 +359,11 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
                   removable={editing && canEditMenu}
                   dateLabel={dateLabel}
                   onOpen={() => navigate({ screen: "record", exercise: name })}
+                  onEditDraft={(log) => navigate({ screen: "record", exercise: name, draftId: log.id })}
+                  onDeleteDraft={(log) => {
+                    setDeleteError(null);
+                    setPendingDelete(log);
+                  }}
                   onRemove={() => askRemove(name, today.length)}
                 />
               );
@@ -342,14 +417,36 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <Modal
           titleId="end-title"
           title={`${dateLabel}のトレーニングを終了しますか？`}
-          body={`記録済み ${recordedCount} / ${session.exercises.length} 種目です。終了後も「再開する」で続けられます。`}
+          body={
+            endError ??
+            "終了すると記録を Notion に反映します。反映した記録はアプリから修正できません。"
+          }
           cancelLabel="キャンセル"
-          confirmLabel="終了する"
-          onCancel={() => setConfirmEnd(false)}
-          onConfirm={() => {
-            setEditing(false);
-            session.finish();
+          confirmLabel={ending ? "反映しています…" : "終了する"}
+          onCancel={() => {
+            if (ending) return;
+            setEndError(null);
             setConfirmEnd(false);
+          }}
+          onConfirm={() => {
+            void confirmFinish();
+          }}
+        />
+      )}
+
+      {pendingDelete && (
+        <Modal
+          titleId="delete-draft-title"
+          title="この下書きを削除しますか？"
+          body={deleteError ?? "未反映の記録だけを消します。Notion にはまだ書いていません。"}
+          cancelLabel="キャンセル"
+          confirmLabel="削除する"
+          onCancel={() => {
+            setDeleteError(null);
+            setPendingDelete(null);
+          }}
+          onConfirm={() => {
+            void confirmDelete();
           }}
         />
       )}

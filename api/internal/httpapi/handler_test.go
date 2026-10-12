@@ -21,12 +21,22 @@ import (
 	"github.com/tag0203/kintore-memo/api/internal/cache"
 	"github.com/tag0203/kintore-memo/api/internal/dayplan"
 	"github.com/tag0203/kintore-memo/api/internal/ddb"
+	"github.com/tag0203/kintore-memo/api/internal/draft"
 	"github.com/tag0203/kintore-memo/api/internal/model"
 	"github.com/tag0203/kintore-memo/api/internal/notion"
 	"github.com/tag0203/kintore-memo/api/internal/secrets"
 )
 
 const userID = "11111111-2222-4333-8444-555555555555"
+
+func withUser(event events.APIGatewayV2HTTPRequest) events.APIGatewayV2HTTPRequest {
+	event.RequestContext.Authorizer = &events.APIGatewayV2HTTPRequestContextAuthorizerDescription{
+		JWT: &events.APIGatewayV2HTTPRequestContextAuthorizerJWTDescription{
+			Claims: map[string]string{"sub": userID},
+		},
+	}
+	return event
+}
 
 func httpEvent(method, rawPath, stage, query, body string, encoded bool) events.APIGatewayV2HTTPRequest {
 	path := rawPath
@@ -207,12 +217,15 @@ func TestCreateLogValidationAndBase64(t *testing.T) {
 	if trailing.StatusCode != 400 || backend.created != 0 || !strings.Contains(trailing.Body, "JSON を確認してください") {
 		t.Fatalf("trailing %d created %d %s", trailing.StatusCode, backend.created, trailing.Body)
 	}
-	spaced, _ := h.Handle(context.Background(), httpEvent("POST", "/api/logs", "$default", "", payload+"\n", false))
-	if spaced.StatusCode != 201 || backend.created != 1 {
+	h = testHandler(backend, nil, nil)
+	h.drafts = draft.NewMemory()
+	spacedEvent := withUser(httpEvent("POST", "/api/logs", "$default", "", payload+"\n", false))
+	spaced, _ := h.Handle(context.Background(), spacedEvent)
+	if spaced.StatusCode != 201 || backend.created != 0 || !strings.Contains(spaced.Body, `"synced":false`) {
 		t.Fatalf("whitespace %d created %d %s", spaced.StatusCode, backend.created, spaced.Body)
 	}
-	res, _ = h.Handle(context.Background(), httpEvent("POST", "/api/logs", "$default", "", base64.StdEncoding.EncodeToString([]byte(payload)), true))
-	if res.StatusCode != 201 || backend.created != 2 || !strings.Contains(res.Body, `"weightKg":82.5`) || strings.Contains(res.Body, "secret_token") {
+	res, _ = h.Handle(context.Background(), withUser(httpEvent("POST", "/api/logs", "$default", "", base64.StdEncoding.EncodeToString([]byte(payload)), true)))
+	if res.StatusCode != 201 || backend.created != 0 || !strings.Contains(res.Body, `"weightKg":82.5`) || strings.Contains(res.Body, "secret_token") {
 		t.Fatalf("create %d %s", res.StatusCode, res.Body)
 	}
 }
@@ -319,12 +332,19 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 			URL: pageURL,
 			Err: errors.New("dial tcp: lookup api.notion.com: no such host token " + token + " id " + notionID),
 		}
-		h := testHandler(&fakeBackend{fail: cause}, nil, nil)
+		backend := &fakeBackend{}
+		h := testHandler(backend, nil, dayplan.NewMemory())
+		h.drafts = draft.NewMemory()
 		body := fmt.Sprintf(
 			`{"exercise":"スクワット","weightKg":80,"reps":8,"sets":3,"difficulty":3,"date":"2026-10-02","title":"%s"}`,
 			marker,
 		)
-		event := httpEvent("POST", "/api/logs", "$default", "", body, false)
+		saved, err := h.Handle(context.Background(), withUser(httpEvent("POST", "/api/logs", "$default", "", body, false)))
+		if err != nil || saved.StatusCode != 201 || backend.created != 0 {
+			t.Fatalf("draft %d %v %s", saved.StatusCode, err, saved.Body)
+		}
+		backend.fail = cause
+		event := withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false))
 		event.RequestContext.RequestID = "VJ6r1Gq1iYcEJ9A="
 		event.Headers = map[string]string{"authorization": "Bearer " + token}
 		res, err := h.Handle(context.Background(), event)
@@ -483,6 +503,74 @@ func TestDayPlanContract(t *testing.T) {
 	res, _ = h.Handle(context.Background(), event)
 	if res.StatusCode != 200 || !strings.Contains(res.Body, `"exercises":[]`) || !strings.Contains(res.Body, `"finished":false`) {
 		t.Fatalf("empty menu get %d %s", res.StatusCode, res.Body)
+	}
+}
+
+func TestDraftHTTPFinishIsIdempotent(t *testing.T) {
+	backend := &fakeBackend{}
+	plans := dayplan.NewMemory()
+	h := testHandler(backend, nil, plans)
+	h.drafts = draft.NewMemory()
+	ctx := context.Background()
+	payload := `{"exercise":"スクワット","weightKg":80,"reps":8,"sets":3,"difficulty":4,"date":"2026-10-02"}`
+	created, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/logs", "$default", "", payload, false)))
+	if created.StatusCode != 201 || backend.created != 0 || !strings.Contains(created.Body, `"synced":false`) {
+		t.Fatalf("create %d %s", created.StatusCode, created.Body)
+	}
+	unauth, _ := h.Handle(ctx, httpEvent("POST", "/api/logs", "$default", "", payload, false))
+	if unauth.StatusCode != 401 || strings.Contains(unauth.Body, "secret_token") {
+		t.Fatalf("unauth %d %s", unauth.StatusCode, unauth.Body)
+	}
+	listed, _ := h.Handle(ctx, withUser(httpEvent("GET", "/api/drafts", "$default", "date=2026-10-02", "", false)))
+	if listed.StatusCode != 200 || !strings.Contains(listed.Body, `"synced":false`) || !strings.Contains(listed.Body, `"weightKg":80`) {
+		t.Fatalf("list %d %s", listed.StatusCode, listed.Body)
+	}
+	var body struct {
+		Drafts []model.ExerciseLog `json:"drafts"`
+	}
+	if err := json.Unmarshal([]byte(listed.Body), &body); err != nil || len(body.Drafts) != 1 {
+		t.Fatal(err, listed.Body)
+	}
+	id := body.Drafts[0].ID
+	changed := `{"exercise":"スクワット","weightKg":82.5,"reps":8,"sets":3,"difficulty":4,"date":"2026-10-02"}`
+	updated, _ := h.Handle(ctx, withUser(httpEvent("PUT", "/api/logs/"+id, "$default", "", changed, false)))
+	if updated.StatusCode != 200 || !strings.Contains(updated.Body, `"weightKg":82.5`) || backend.created != 0 {
+		t.Fatalf("update %d %s", updated.StatusCode, updated.Body)
+	}
+	finish, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false)))
+	if finish.StatusCode != 200 || backend.created != 1 || !strings.Contains(finish.Body, `"flushed":1`) || !strings.Contains(finish.Body, `"synced":true`) {
+		t.Fatalf("finish %d created %d %s", finish.StatusCode, backend.created, finish.Body)
+	}
+	again, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false)))
+	if again.StatusCode != 200 || backend.created != 1 || !strings.Contains(again.Body, `"flushed":0`) {
+		t.Fatalf("again %d created %d %s", again.StatusCode, backend.created, again.Body)
+	}
+	denied, _ := h.Handle(ctx, withUser(httpEvent("DELETE", "/api/logs/"+id, "$default", "", "", false)))
+	if denied.StatusCode != 409 || backend.created != 1 {
+		t.Fatalf("delete synced %d %s", denied.StatusCode, denied.Body)
+	}
+	if strings.Contains(finish.Body, "secret_token") || strings.Contains(again.Body, "ntn_") {
+		t.Fatal("finish leaked a secret")
+	}
+
+	older := `{"exercise":"スクワット","weightKg":70,"reps":8,"sets":3,"difficulty":3,"date":"2026-10-01"}`
+	savedOlder, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/logs", "$default", "", older, false)))
+	if savedOlder.StatusCode != 201 || backend.created != 1 {
+		t.Fatalf("older draft %d created %d %s", savedOlder.StatusCode, backend.created, savedOlder.Body)
+	}
+	// 2026-10-04 00:10 JST. 2026-10-02 is already synced. 2026-10-01 is due and flushed once.
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	h.now = func() time.Time { return time.Date(2026, 10, 3, 15, 10, 0, 0, time.UTC) }
+	if err := h.HandleFlush(ctx, events.CloudWatchEvent{AccountID: "123456789012"}); err != nil {
+		t.Fatal(err)
+	}
+	if backend.created != 2 {
+		t.Fatalf("nightly created %d notion pages", backend.created)
+	}
+	if strings.Contains(logs.String(), "123456789012") || strings.Contains(logs.String(), "secret_token") {
+		t.Fatalf("flush log leaked: %s", logs.String())
 	}
 }
 

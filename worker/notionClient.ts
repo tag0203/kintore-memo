@@ -180,6 +180,22 @@ export function createNotionClient(env: NotionEnv, fetchImpl: typeof fetch = fet
       };
     },
 
+    async updateLog() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+
+    async deleteLog() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+
+    async finishDay() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+
+    isDayClosed() {
+      return false;
+    },
+
     async touchExercise(name, atISO) {
       const trimmed = name.trim();
       if (!trimmed) throw new Error("種目名を入力してください");

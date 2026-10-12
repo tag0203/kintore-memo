@@ -3,6 +3,8 @@ package awsadapter
 
 import (
 	"context"
+	"errors"
+	"strconv"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
@@ -12,6 +14,9 @@ import (
 
 	"github.com/tag0203/kintore-memo/api/internal/ddb"
 )
+
+// ErrConditionalCheck is a rejected Put or Delete condition. Draft writes retry it.
+var ErrConditionalCheck = errors.New("conditional check failed")
 
 // Client implements the cache and DayPlan table port, plus SSM GetParameter.
 type Client struct {
@@ -102,6 +107,56 @@ func (c *Client) Delete(ctx context.Context, table, pk, sk string) error {
 			"sk": &types.AttributeValueMemberS{Value: sk},
 		},
 	})
+	return err
+}
+
+// PutIf writes the whole item when the stored version matches.
+// exists false inserts only when the key is absent.
+func (c *Client) PutIf(ctx context.Context, table string, item any, previousVersion int, exists bool) error {
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return err
+	}
+	input := &dynamodb.PutItemInput{
+		TableName: aws.String(table),
+		Item:      av,
+	}
+	if exists {
+		input.ConditionExpression = aws.String("#version = :previous")
+		input.ExpressionAttributeNames = map[string]string{"#version": "version"}
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":previous": &types.AttributeValueMemberN{Value: strconv.Itoa(previousVersion)},
+		}
+	} else {
+		input.ConditionExpression = aws.String("attribute_not_exists(pk)")
+	}
+	_, err = c.dynamo.PutItem(ctx, input)
+	return conditionErr(err)
+}
+
+// DeleteIf removes a key when the stored version matches.
+func (c *Client) DeleteIf(ctx context.Context, table, pk, sk string, previousVersion int) error {
+	_, err := c.dynamo.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(table),
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: pk},
+			"sk": &types.AttributeValueMemberS{Value: sk},
+		},
+		ConditionExpression:       aws.String("#version = :previous"),
+		ExpressionAttributeNames:  map[string]string{"#version": "version"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{":previous": &types.AttributeValueMemberN{Value: strconv.Itoa(previousVersion)}},
+	})
+	return conditionErr(err)
+}
+
+func conditionErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var cond *types.ConditionalCheckFailedException
+	if errors.As(err, &cond) {
+		return ErrConditionalCheck
+	}
 	return err
 }
 

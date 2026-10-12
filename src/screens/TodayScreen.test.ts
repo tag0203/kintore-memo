@@ -74,6 +74,29 @@ describe("TodayExerciseRow", () => {
     expect(html).toContain("スクワットを10/10（前日）のメニューから外す");
     expect(html).not.toContain(">今日<");
   });
+
+  it("shows 未 and keeps 修正 and 削除 outside the card while a row is unsynced", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayExerciseRow, {
+        index: 0,
+        name: "スクワット",
+        previous: [],
+        today: [{ ...log("draft-1"), synced: false }],
+        removable: false,
+        onOpen: vi.fn(),
+        onRemove: vi.fn(),
+        onEditDraft: vi.fn(),
+        onDeleteDraft: vi.fn(),
+      }),
+    );
+    const card = html.slice(0, html.indexOf("</button>") + "</button>".length);
+    expect(card).toContain("未");
+    expect(card).not.toContain("is-done");
+    expect(card).not.toContain("修正");
+    expect(card).not.toContain("削除");
+    expect(html).toContain("修正");
+    expect(html).toContain("スクワットの下書きを削除");
+  });
 });
 
 describe("SessionDatePicker", () => {

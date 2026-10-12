@@ -29,6 +29,18 @@ function client(partial: Partial<WorkoutLogClient> = {}): WorkoutLogClient {
         createdAt: "2026-09-26T00:00:00.000Z",
       };
     },
+    async updateLog() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+    async deleteLog() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+    async finishDay() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+    isDayClosed() {
+      return false;
+    },
     async touchExercise(name, atISO) {
       return { name, lastPickedAt: atISO };
     },

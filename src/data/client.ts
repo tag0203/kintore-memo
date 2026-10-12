@@ -13,8 +13,16 @@ export interface WorkoutLogClient {
   getPreviousLog(exercise: string, beforeDate: string): Promise<ExerciseLog[]>;
   /** その日に保存した行をすべて。無ければ空。 */
   getLogOnDate(exercise: string, date: string): Promise<ExerciseLog[]>;
-  /** 追記のみ。既存行は更新しない。 */
+  /** 下書きを1行追加する。Notion にはまだ書かない。 */
   createLog(input: NewExerciseLog): Promise<ExerciseLog>;
+  /** 未反映の下書きだけを書き換える。 */
+  updateLog(id: string, input: NewExerciseLog): Promise<ExerciseLog>;
+  /** 未反映の下書きだけを消す。 */
+  deleteLog(id: string): Promise<void>;
+  /** その日の下書きを Notion に反映する。反映済みなら何も足さない。 */
+  finishDay(date: string): Promise<void>;
+  /** その日が Notion に反映済みなら true。下書きの修正と削除はできない。 */
+  isDayClosed(date: string): boolean;
   /** 保存した種目の「最近」順を更新する。未知の名前ならカタログに足す。onDate はそのセッション日。 */
   touchExercise(name: string, atISO: string, onDate?: string): Promise<ExerciseSummary>;
 }

@@ -12,6 +12,10 @@ export interface ExerciseLog {
   /** Notion のタイトル。記録行では「－」を入れる。 */
   title: string;
   createdAt: string;
+  /**
+   * false は DynamoDB の下書き。未設定は Notion の行で、アプリからは直さない。
+   */
+  synced?: boolean;
 }
 
 export interface NewExerciseLog {

@@ -2,6 +2,7 @@ package notion
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 
@@ -172,26 +173,44 @@ func (s *Service) Bootstrap(ctx context.Context, date string, exercises []string
 
 // CreateLog appends a row and drops the catalog, the window, and that exercise's keys.
 func (s *Service) CreateLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
-	log, err := s.client.CreateLog(ctx, input)
+	created, err := s.client.CreateLog(ctx, input)
 	if err != nil {
 		return model.ExerciseLog{}, err
 	}
-	if err := s.json.Delete(ctx, []string{"exercises"}); err != nil {
+	if err := s.dropLogCaches(ctx, input); err != nil {
 		return model.ExerciseLog{}, err
+	}
+	return created, nil
+}
+
+// AppendLog writes a Notion page for a draft flush.
+// A cache delete failure is logged and ignored so the caller can store the page id.
+// The log line does not include the error text.
+func (s *Service) AppendLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	created, err := s.client.CreateLog(ctx, input)
+	if err != nil {
+		return model.ExerciseLog{}, err
+	}
+	if err := s.dropLogCaches(ctx, input); err != nil {
+		log.Printf("notion cache drop failed: %T", err)
+	}
+	return created, nil
+}
+
+func (s *Service) dropLogCaches(ctx context.Context, input model.NewExerciseLog) error {
+	if err := s.json.Delete(ctx, []string{"exercises"}); err != nil {
+		return err
 	}
 	if err := s.json.Delete(ctx, []string{"exercises", "recent"}); err != nil {
-		return model.ExerciseLog{}, err
+		return err
 	}
 	if err := s.json.Delete(ctx, []string{"logs", "today-rows", input.Exercise, input.Date}); err != nil {
-		return model.ExerciseLog{}, err
+		return err
 	}
 	prefix := "logs#previous-rows#" + input.Exercise + "#"
-	if err := s.json.DeleteWhere(ctx, func(key string) bool {
+	return s.json.DeleteWhere(ctx, func(key string) bool {
 		return key == "bootstrap" || strings.HasPrefix(key, "bootstrap#") || strings.HasPrefix(key, prefix)
-	}); err != nil {
-		return model.ExerciseLog{}, err
-	}
-	return log, nil
+	})
 }
 
 type resolved struct {

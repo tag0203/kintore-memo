@@ -12,6 +12,9 @@ type ExerciseLog struct {
 	Date       string  `json:"date"`
 	Title      string  `json:"title"`
 	CreatedAt  string  `json:"createdAt"`
+	// Synced is false for a draft that is not in Notion yet.
+	// Nil means a Notion row, which the app does not edit.
+	Synced *bool `json:"synced,omitempty"`
 }
 
 // NewExerciseLog is the POST /api/logs body.
@@ -44,6 +47,8 @@ type Bootstrap struct {
 	Exercises []ExerciseSummary  `json:"exercises"`
 	Recent    []ExerciseSummary  `json:"recent"`
 	Logs      map[string]LogPair `json:"logs"`
+	// DaySynced is true after this session date was flushed to Notion.
+	DaySynced bool `json:"daySynced,omitempty"`
 }
 
 // Window is the newest Notion page of logs, shared by bootstrap and the GETs.

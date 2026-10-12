@@ -316,6 +316,11 @@ jobs:
             grep 'ApiFunction' /tmp/sam-build.list || true
             exit 1
           fi
+          if ! grep -E -q -- '^-..x.*build/FlushFunction/bootstrap$' /tmp/sam-build.list; then
+            echo "flush bootstrap is missing from the SAM archive or is not executable."
+            grep 'FlushFunction' /tmp/sam-build.list || true
+            exit 1
+          fi
 
       - name: Upload SAM build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -368,6 +373,11 @@ jobs:
           if [ ! -x infra/.aws-sam/build/ApiFunction/bootstrap ]; then
             echo "bootstrap is missing or not executable after unpack. Refusing to deploy."
             ls -la infra/.aws-sam/build/ApiFunction/ || true
+            exit 1
+          fi
+          if [ ! -x infra/.aws-sam/build/FlushFunction/bootstrap ]; then
+            echo "flush bootstrap is missing or not executable after unpack. Refusing to deploy."
+            ls -la infra/.aws-sam/build/FlushFunction/ || true
             exit 1
           fi
 
