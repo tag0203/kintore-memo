@@ -1,0 +1,493 @@
+[
+  {
+    "Action": "iam:CreateServiceLinkedRole",
+    "Condition": {
+      "StringEquals": {
+        "iam:AWSServiceName": "ops.apigateway.amazonaws.com"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/aws-service-role/ops.apigateway.amazonaws.com/AWSServiceRoleForAPIGateway",
+    "Sid": "ApiGatewayServiceLinkedRole"
+  },
+  {
+    "Action": [
+      "logs:CreateLogGroup",
+      "logs:DeleteLogGroup",
+      "logs:PutRetentionPolicy",
+      "logs:DeleteRetentionPolicy",
+      "logs:ListTagsForResource",
+      "logs:TagResource",
+      "logs:UntagResource"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-api",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-api:*",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-flush",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-flush:*",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/apigateway/kintore-memo-*-http",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/apigateway/kintore-memo-*-http:*"
+    ],
+    "Sid": "ApiLogGroups"
+  },
+  {
+    "Action": [
+      "cloudformation:CreateStack",
+      "cloudformation:UpdateStack",
+      "cloudformation:DescribeStacks",
+      "cloudformation:DescribeStackEvents",
+      "cloudformation:DescribeStackResource",
+      "cloudformation:DescribeStackResources",
+      "cloudformation:GetTemplate",
+      "cloudformation:GetTemplateSummary",
+      "cloudformation:CreateChangeSet",
+      "cloudformation:DescribeChangeSet",
+      "cloudformation:ExecuteChangeSet",
+      "cloudformation:DeleteChangeSet",
+      "cloudformation:ListStackResources",
+      "cloudformation:ListChangeSets",
+      "cloudformation:ContinueUpdateRollback",
+      "cloudformation:TagResource",
+      "cloudformation:UntagResource"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:cloudformation:ap-northeast-1:123456789012:stack/kintore-memo-dev/*",
+      "arn:aws:cloudformation:ap-northeast-1:123456789012:stack/kintore-memo-staging/*",
+      "arn:aws:cloudformation:ap-northeast-1:123456789012:stack/kintore-memo-prod/*",
+      "arn:aws:cloudformation:ap-northeast-1:123456789012:stack/aws-sam-cli-managed-default/*"
+    ],
+    "Sid": "CloudFormationAppAndSamArtifactStacks"
+  },
+  {
+    "Action": [
+      "cloudformation:CreateChangeSet",
+      "cloudformation:DescribeChangeSet",
+      "cloudformation:ExecuteChangeSet"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:cloudformation:ap-northeast-1:aws:transform/Serverless-2016-10-31",
+    "Sid": "CloudFormationSamTransform"
+  },
+  {
+    "Action": [
+      "cloudfront:CreateDistribution",
+      "cloudfront:CreateOriginAccessControl",
+      "cloudfront:TagResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "CloudFrontCreate"
+  },
+  {
+    "Action": [
+      "cloudfront:CreateResponseHeadersPolicy"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "CloudFrontCreateResponseHeadersPolicy"
+  },
+  {
+    "Action": [
+      "cloudfront:GetDistribution",
+      "cloudfront:GetDistributionConfig",
+      "cloudfront:UpdateDistribution",
+      "cloudfront:DeleteDistribution",
+      "cloudfront:UntagResource",
+      "cloudfront:ListTagsForResource",
+      "cloudfront:CreateInvalidation",
+      "cloudfront:GetInvalidation"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:cloudfront::123456789012:distribution/*",
+    "Sid": "CloudFrontDistributions"
+  },
+  {
+    "Action": [
+      "cloudfront:GetOriginAccessControl",
+      "cloudfront:UpdateOriginAccessControl",
+      "cloudfront:DeleteOriginAccessControl"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:cloudfront::123456789012:origin-access-control/*",
+    "Sid": "CloudFrontOriginAccessControls"
+  },
+  {
+    "Action": [
+      "cloudfront:GetResponseHeadersPolicy",
+      "cloudfront:GetResponseHeadersPolicyConfig",
+      "cloudfront:UpdateResponseHeadersPolicy",
+      "cloudfront:DeleteResponseHeadersPolicy"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:cloudfront::123456789012:response-headers-policy/*",
+    "Sid": "CloudFrontResponseHeadersPolicies"
+  },
+  {
+    "Action": "cognito-idp:CreateUserPool",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "CognitoCreateUserPool"
+  },
+  {
+    "Action": [
+      "cognito-idp:DeleteUserPool",
+      "cognito-idp:DescribeUserPool",
+      "cognito-idp:UpdateUserPool",
+      "cognito-idp:CreateUserPoolClient",
+      "cognito-idp:DeleteUserPoolClient",
+      "cognito-idp:DescribeUserPoolClient",
+      "cognito-idp:UpdateUserPoolClient",
+      "cognito-idp:GetUserPoolMfaConfig",
+      "cognito-idp:TagResource",
+      "cognito-idp:UntagResource",
+      "cognito-idp:ListTagsForResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:cognito-idp:ap-northeast-1:123456789012:userpool/*",
+    "Sid": "CognitoUserPools"
+  },
+  {
+    "Action": "iam:CreateRole",
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "arn:aws:iam::123456789012:policy/kintore-memo-api-permissions-boundary"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "CreateApiFunctionRoleWithBoundary"
+  },
+  {
+    "Action": [
+      "kms:Decrypt"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "kms:ViaService": "ssm.ap-northeast-1.amazonaws.com"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:kms:ap-northeast-1:123456789012:alias/aws/ssm",
+    "Sid": "DecryptSecureStringViaSsm"
+  },
+  {
+    "Action": [
+      "iam:CreateAccessKey",
+      "iam:UpdateAccessKey",
+      "iam:CreateLoginProfile"
+    ],
+    "Effect": "Deny",
+    "Resource": "*",
+    "Sid": "DenyAccessKeys"
+  },
+  {
+    "Action": [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+      "ssm:GetParametersByPath",
+      "ssm:GetParameterHistory",
+      "ssm:PutParameter",
+      "ssm:DeleteParameter"
+    ],
+    "Effect": "Deny",
+    "Resource": "arn:aws:ssm:*:123456789012:parameter/kintore-memo/*/notion/*",
+    "Sid": "DenyNotionParameterAccess"
+  },
+  {
+    "Action": "iam:DeleteRolePermissionsBoundary",
+    "Effect": "Deny",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "DenyStripApiRoleBoundary"
+  },
+  {
+    "Action": "logs:DescribeLogGroups",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "DescribeApiLogGroups"
+  },
+  {
+    "Action": [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-dev",
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-staging",
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-prod"
+    ],
+    "Sid": "DynamoDBTableAccess"
+  },
+  {
+    "Action": [
+      "dynamodb:CreateTable",
+      "dynamodb:DeleteTable",
+      "dynamodb:DescribeTable",
+      "dynamodb:UpdateTable",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:UpdateTimeToLive",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:UpdateContinuousBackups",
+      "dynamodb:TagResource",
+      "dynamodb:UntagResource",
+      "dynamodb:ListTagsOfResource"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-dev",
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-staging",
+      "arn:aws:dynamodb:ap-northeast-1:123456789012:table/kintore-memo-prod"
+    ],
+    "Sid": "DynamoDbAppTables"
+  },
+  {
+    "Action": [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:EnableRule",
+      "events:DisableRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:ListTargetsByRule",
+      "events:ListTagsForResource",
+      "events:TagResource",
+      "events:UntagResource"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:events:ap-northeast-1:123456789012:rule/kintore-memo-*",
+    "Sid": "EventBridgeFlushRules"
+  },
+  {
+    "Action": [
+      "apigateway:GET",
+      "apigateway:POST",
+      "apigateway:PUT",
+      "apigateway:PATCH",
+      "apigateway:DELETE"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:apigateway:ap-northeast-1::/apis",
+      "arn:aws:apigateway:ap-northeast-1::/apis/*",
+      "arn:aws:apigateway:ap-northeast-1::/tags/*"
+    ],
+    "Sid": "HttpApi"
+  },
+  {
+    "Action": [
+      "logs:CreateLogDelivery",
+      "logs:GetLogDelivery",
+      "logs:UpdateLogDelivery",
+      "logs:DeleteLogDelivery",
+      "logs:ListLogDeliveries",
+      "logs:PutResourcePolicy",
+      "logs:DescribeResourcePolicies"
+    ],
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "HttpApiAccessLogDelivery"
+  },
+  {
+    "Action": [
+      "apigateway:TagResource",
+      "apigateway:UntagResource"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:apigateway:ap-northeast-1::/apis",
+      "arn:aws:apigateway:ap-northeast-1::/apis/*"
+    ],
+    "Sid": "HttpApiStageTags"
+  },
+  {
+    "Action": [
+      "lambda:InvokeFunction"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-flush",
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-flush:*"
+    ],
+    "Sid": "InvokeFlushFunction"
+  },
+  {
+    "Action": [
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "lambda:GetPolicy",
+      "lambda:ListTags",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:PublishVersion",
+      "lambda:PutFunctionConcurrency",
+      "lambda:DeleteFunctionConcurrency"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-api",
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-api:*",
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-flush",
+      "arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-*-flush:*"
+    ],
+    "Sid": "LambdaAppFunctions"
+  },
+  {
+    "Action": "s3:ListAllMyBuckets",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ListBucketsForSamResolveS3"
+  },
+  {
+    "Action": [
+      "iam:DeleteRole",
+      "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "arn:aws:iam::123456789012:policy/kintore-memo-api-permissions-boundary"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "ManageBoundedApiFunctionRoles"
+  },
+  {
+    "Action": "iam:PassRole",
+    "Condition": {
+      "StringEquals": {
+        "iam:PassedToService": "lambda.amazonaws.com"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "PassRoleToLambdaOnly"
+  },
+  {
+    "Action": [
+      "iam:GetRole",
+      "iam:ListRoleTags",
+      "iam:GetRolePolicy",
+      "iam:ListRolePolicies"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "ReadApiFunctionRoles"
+  },
+  {
+    "Action": [
+      "iam:GetPolicy",
+      "iam:GetPolicyVersion"
+    ],
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:policy/kintore-memo-api-permissions-boundary",
+    "Sid": "ReadApiPermissionsBoundaryPolicy"
+  },
+  {
+    "Action": [
+      "logs:DescribeLogStreams",
+      "logs:FilterLogEvents",
+      "logs:GetLogEvents"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/apigateway/kintore-memo-*-http",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/apigateway/kintore-memo-*-http:*"
+    ],
+    "Sid": "ReadHttpApiAccessLogGroup"
+  },
+  {
+    "Action": [
+      "ssm:GetParameter"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:ssm:ap-northeast-1:123456789012:parameter/kintore-memo/*/notion/*"
+    ],
+    "Sid": "ReadNotionSecureStrings"
+  },
+  {
+    "Action": [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:GetBucketLocation",
+      "s3:ListBucket",
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload",
+      "s3:ListBucketMultipartUploads",
+      "s3:ListMultipartUploadParts",
+      "s3:GetBucketVersioning",
+      "s3:PutBucketVersioning",
+      "s3:GetEncryptionConfiguration",
+      "s3:PutEncryptionConfiguration",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:GetBucketOwnershipControls",
+      "s3:PutBucketOwnershipControls",
+      "s3:GetBucketPolicy",
+      "s3:PutBucketPolicy",
+      "s3:DeleteBucketPolicy",
+      "s3:GetBucketTagging",
+      "s3:PutBucketTagging",
+      "s3:GetLifecycleConfiguration",
+      "s3:PutLifecycleConfiguration",
+      "s3:GetBucketAcl"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:s3:::kintore-memo-*-spa-123456789012",
+      "arn:aws:s3:::kintore-memo-*-spa-123456789012/*",
+      "arn:aws:s3:::aws-sam-cli-managed-default-*",
+      "arn:aws:s3:::aws-sam-cli-managed-default-*/*"
+    ],
+    "Sid": "SamArtifactAndSpaBuckets"
+  },
+  {
+    "Action": "iam:PutRolePermissionsBoundary",
+    "Condition": {
+      "StringEquals": {
+        "iam:PermissionsBoundary": "arn:aws:iam::123456789012:policy/kintore-memo-api-permissions-boundary"
+      }
+    },
+    "Effect": "Allow",
+    "Resource": "arn:aws:iam::123456789012:role/kintore-memo-*-api",
+    "Sid": "SetApiRolePermissionsBoundary"
+  },
+  {
+    "Action": "cloudformation:ValidateTemplate",
+    "Effect": "Allow",
+    "Resource": "*",
+    "Sid": "ValidateTemplate"
+  },
+  {
+    "Action": [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ],
+    "Effect": "Allow",
+    "Resource": [
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-api",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-api:*",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-flush",
+      "arn:aws:logs:ap-northeast-1:123456789012:log-group:/aws/lambda/kintore-memo-*-flush:*"
+    ],
+    "Sid": "WriteOwnLogGroup"
+  }
+]

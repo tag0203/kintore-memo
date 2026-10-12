@@ -162,6 +162,18 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 
 ポリシーの実体は `infra/github-oidc.yaml` です。概要だけここに書きます。
 
+デプロイロール `kintore-memo-gha-deploy` の権限は、インラインポリシーではなくカスタマー管理ポリシーです。ロールに付くインラインポリシーは合計 10,240 バイトまでで、flush 関数のステートメントを足すと超えます。管理ポリシーは 1 つ 6,144 バイト、ロールへのアタッチは 10 個までです。アクション、リソース、条件はインラインだったときと同じで、`ManagedPolicyArns` で次の 5 つを付けます。
+
+| 管理ポリシー | 中身 |
+| --- | --- |
+| `kintore-memo-gha-deploy-cfn-sam` | CloudFormation と S3 |
+| `kintore-memo-gha-deploy-lambda-iam` | Lambda、API ロールの IAM、アクセスキーの拒否 |
+| `kintore-memo-gha-deploy-logs-http` | ログと HTTP API の動詞 |
+| `kintore-memo-gha-deploy-data-edge` | DynamoDB、Cognito、CloudFront、EventBridge、Notion 用 SSM の拒否 |
+| `kintore-memo-gha-deploy-http-api-tags` | ステージの `apigateway:TagResource` / `UntagResource` |
+
+境界 `kintore-memo-api-permissions-boundary` は別の管理ポリシーのままです。デプロイロールには付けません。API ロールの権限は `infra/template.yaml` のインラインポリシーのままです。サイズは `npm test`（`infra/github-oidc.test.mjs`）が見ます。最小化 JSON で、管理ポリシーは 6,144 バイト以下、ロールのインライン合計は 10,240 バイト以下です。手元では `node infra/iam-policy-size.mjs` でも出せます。見積もりはパーティション `aws`、リージョン `ap-northeast-1`、12 桁のアカウント ID で、`${AWS::Partition}` などを展開したあと空白を除いた長さです。
+
 | 許す | 範囲 |
 | --- | --- |
 | CloudFormation | スタック `kintore-memo-dev` / `staging` / `prod` と、SAM が成果物バケットに使う `aws-sam-cli-managed-default`。SAM Transform。`ValidateTemplate` のみリソース `*` |
@@ -183,7 +195,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 - Notion 用 SSM（`/kintore-memo/*/notion/*`）の読み書き（明示的に拒否）。ただし境界導入後も、正当な API ロール経由の Notion 読取は Lambda コード変更で間接利用され得る。デプロイ担当が SSM を直接読めないことと、Lambda が読めないことは別
 - スタックの削除（`cloudformation:DeleteStack` は付けていません。削除は手元の管理者で行います）
 - デプロイロール自身（`kintore-memo-gha-deploy`）の信頼ポリシー変更。管理できるロール名は `kintore-memo-*-api` だけです
-- マネージドポリシーのアタッチ。Lambda の権限は `infra/template.yaml` のインラインポリシーのままにしてください
+- デプロイロールから他のロールへのマネージドポリシーのアタッチ（`iam:AttachRolePolicy` はありません）。上表の管理ポリシーは、このデプロイロール自身にブートストラップが付けるものです。Lambda の権限は `infra/template.yaml` のインラインポリシーのままにしてください
 - API ロールへの `Action: '*'` 級の拡大。PermissionsBoundary がログ・DynamoDB アイテム・Notion SSM 読取・KMS（SSM経由）に上限を置く
 
 `main` に入ったテンプレート変更は、このロールの範囲と境界の内側でそのまま適用されます。それは git に残る変更であり、アクセスキーを配ることではありません。
@@ -251,7 +263,34 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-`UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。
+`UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。この権限をインラインポリシーのまま足すと、ロール `kintore-memo-gha-deploy` の合計が 10,240 バイトを超えてスタック更新が失敗します。適用するテンプレートは、次の節の管理ポリシーに分けた版です。
+
+## デプロイロールのインラインポリシー上限
+
+`kintore-memo-gha-deploy` のインラインポリシー合計が 10,240 バイトを超え、スタック `kintore-memo-github-oidc` の更新は IAM 409（`Maximum policy size of 10240 bytes exceeded for role kintore-memo-gha-deploy`）で失敗します。権限の追加も削除もしていません。同じステートメントを、上の 5 つのカスタマー管理ポリシーへ移しています。境界 `kintore-memo-api-permissions-boundary` の中身も変えていません。flush 関数 `kintore-memo-*-flush` の `logs:CreateLogGroup` は `kintore-memo-gha-deploy-logs-http` にあります。境界はこれまでどおり、そのロググループへの `logs:CreateLogStream` と `logs:PutLogEvents`、および `lambda:InvokeFunction` を許します。
+
+この更新が終わる前の dev デプロイ（[run 38241587055](https://github.com/tag0203/kintore-memo/actions/runs/38241587055)）は、ロググループ `/aws/lambda/kintore-memo-dev-flush` の `logs:CreateLogGroup` が AccessDenied になります。アプリの `sam deploy` より先に、手元の管理者でこのスタックを更新します。Actions からは更新しません。リポジトリルートで、この変更を含むツリーを使います。
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/github-oidc.yaml \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+```
+
+成功の確認はスタックの状態だけを見ます。ロール ARN や他の出力は出しません。
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --query "Stacks[0].StackStatus" \
+  --output text
+```
+
+`UPDATE_COMPLETE` になってから、アプリをデプロイします。
 
 ## デプロイの実行
 

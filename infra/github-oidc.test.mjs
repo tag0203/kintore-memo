@@ -1,9 +1,21 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  MANAGED_POLICIES_PER_ROLE,
+  MANAGED_POLICY_LIMIT,
+  ROLE_INLINE_LIMIT,
+  canonicalStatements,
+  estimateIamPolicies,
+} from "./iam-policy-size.mjs";
 
 const templatePath = fileURLToPath(new URL("./github-oidc.yaml", import.meta.url));
 const template = readFileSync(templatePath, "utf8");
+// Resolved statements for partition aws, region ap-northeast-1, and a 12-digit account.
+// This is the permission set from before the managed-policy split. A diff is a permission change.
+const expectedStatements = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./github-oidc.statements.json", import.meta.url)), "utf8"),
+);
 
 describe("GitHub OIDC bootstrap", () => {
   it("defines a PermissionsBoundary and requires it on API role IAM changes", () => {
@@ -135,8 +147,9 @@ describe("GitHub OIDC bootstrap", () => {
       template.indexOf("HttpApiStageTagPolicy:"),
       template.indexOf("Outputs:"),
     );
-    expect(policy).toContain("PolicyName: HttpApiStageTags");
-    expect(policy).toContain("Roles:\n        - !Ref GitHubDeployRole");
+    expect(policy).toContain("Type: AWS::IAM::ManagedPolicy");
+    expect(policy).toContain("ManagedPolicyName: kintore-memo-gha-deploy-http-api-tags");
+    expect(policy).not.toContain("Roles:");
     expect(policy).toContain("apigateway:TagResource");
     expect(policy).toContain("apigateway:UntagResource");
     expect(policy).toContain("arn:${AWS::Partition}:apigateway:${AWS::Region}::/apis");
@@ -144,6 +157,45 @@ describe("GitHub OIDC bootstrap", () => {
     expect(policy).not.toContain("/tags/");
     expect(policy).not.toContain('Resource: "*"');
     expect(policy).toContain("W3037");
+
+    const role = template.slice(template.indexOf("GitHubDeployRole:"), template.indexOf("DeployCfnSamPolicy:"));
+    expect(role).toContain("ManagedPolicyArns:");
+    expect(role).toContain("!Ref HttpApiStageTagPolicy");
+    expect(role).not.toContain("Policies:");
+  });
+
+  it("keeps every statement and stays under the IAM size quotas", () => {
+    const report = estimateIamPolicies(template);
+    expect(report.violations).toEqual([]);
+    expect(canonicalStatements(report.statements)).toEqual(expectedStatements);
+
+    const role = report.roles.find((item) => item.roleName === "kintore-memo-gha-deploy");
+    expect(role).toMatchObject({
+      inlineBytes: 0,
+      managedPolicyRefs: [
+        "DeployCfnSamPolicy",
+        "DeployLambdaIamPolicy",
+        "DeployLogsHttpApiPolicy",
+        "DeployDataEdgePolicy",
+        "HttpApiStageTagPolicy",
+      ],
+    });
+    expect(role.managedPolicyRefs.length).toBeLessThanOrEqual(MANAGED_POLICIES_PER_ROLE);
+    expect(role.inlineBytes).toBeLessThanOrEqual(ROLE_INLINE_LIMIT);
+
+    const byName = Object.fromEntries(report.managed.map((policy) => [policy.name, policy.bytes]));
+    expect(Object.keys(byName).sort()).toEqual([
+      "kintore-memo-api-permissions-boundary",
+      "kintore-memo-gha-deploy-cfn-sam",
+      "kintore-memo-gha-deploy-data-edge",
+      "kintore-memo-gha-deploy-http-api-tags",
+      "kintore-memo-gha-deploy-lambda-iam",
+      "kintore-memo-gha-deploy-logs-http",
+    ]);
+    for (const [name, bytes] of Object.entries(byName)) {
+      expect(bytes, name).toBeLessThanOrEqual(MANAGED_POLICY_LIMIT);
+      expect(bytes, name).toBeGreaterThan(0);
+    }
   });
 
   it("lets the deploy role manage response headers policies in this account only", () => {
