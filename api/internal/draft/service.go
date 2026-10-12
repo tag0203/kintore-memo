@@ -601,8 +601,9 @@ func (s *Service) claimAcceptedLease(ctx context.Context, userID, date string, n
 			synced = true
 			return errNoWrite
 		}
-		sameJob := day.FlushJobLease == jobLease || day.FlushLeaseToken == jobLease
-		if leaseActive(*day, now) && !sameJob {
+		// The accept token may be replaced once. A second delivery of this job,
+		// or any other finish, waits until that lease expires.
+		if leaseActive(*day, now) && day.FlushLeaseToken != jobLease {
 			return BusyError{}
 		}
 		day.FlushJobLease = jobLease

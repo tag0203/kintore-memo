@@ -98,7 +98,7 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | `flushLeaseToken` | String | 反映中の呼び出しを識別する。空なら誰も持っていない |
 | `flushLeaseUntil` | Number | そのリースの期限（Unix 秒）。期限のあと別の反映が引き継げる |
 | `flushStatus` | String | `running` または `failed`。空なら反映を始めていない |
-| `flushJobLease` | String | 受け付けた終了の識別子。同じ終了のやり直しだけが引き継げる |
+| `flushJobLease` | String | 受け付けた終了の識別子。期限内のリースは、同じ終了の二重配信でも奪えない。期限のあとだけ引き継げる |
 | `ttl` | Number | 下表 |
 
 `notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。ページ ID が空でも、Notion の `下書きID`（下書きの UUID）が同じ行があれば、そのページを再利用してから ID を保存します。`POST /api/day/{date}/finish` は受付だけです。API は `flushLeaseToken` を条件付きで書き、flush 関数を非同期で起動して返します。反映中の作成・修正・削除は 409 です。受付のリースは 60 秒、flush 関数が引き継いだあとは 360 秒です。関数のタイムアウトは 300 秒です。

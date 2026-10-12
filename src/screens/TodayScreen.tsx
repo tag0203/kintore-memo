@@ -16,6 +16,11 @@ interface PlanRow {
   today: ExerciseLog[];
 }
 
+/** flushing から synced に変わったとき、表示中の行を取り直す。反映中の「未」を残さない。 */
+export function shouldReloadLogs(status: DayFlushStatus): boolean {
+  return status === "synced";
+}
+
 /** 終了ボタンの代わりに出す文言。送信済みの日は再開できない。 */
 export function todayFinishView(menuFinished: boolean, status: DayFlushStatus): {
   showResume: boolean;
@@ -252,6 +257,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           if (stop) return;
           setNotionStatus(status);
           if (status === "synced") session.finish();
+          if (shouldReloadLogs(status)) setLogsRevision((value) => value + 1);
         })
         .catch(() => {
           if (!stop) setNotionStatus("failed");

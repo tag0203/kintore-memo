@@ -57,8 +57,8 @@ type DraftDayItem struct {
 	// wait until it is cleared or FlushLeaseUntil (unix seconds) has passed.
 	FlushLeaseToken string `dynamodbav:"flushLeaseToken,omitempty"`
 	FlushLeaseUntil int64  `dynamodbav:"flushLeaseUntil,omitempty"`
-	// FlushJobLease is the token from Accept. A retry of that same finish may
-	// claim it. A different finish cannot, while the lease is still in the future.
+	// FlushJobLease is the token from Accept. A second delivery may claim it
+	// only after FlushLeaseUntil. A live lease stays with its holder.
 	FlushJobLease string `dynamodbav:"flushJobLease,omitempty"`
 	// FlushStatus is "running" or "failed". Empty means no finish is in flight.
 	FlushStatus string `dynamodbav:"flushStatus,omitempty"`

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { Modal } from "../components/Modal";
 import type { ExerciseLog } from "../domain";
-import { SessionDatePicker, TodayExerciseRow, removalConfirmBody, todayFinishView } from "./TodayScreen";
+import { SessionDatePicker, TodayExerciseRow, removalConfirmBody, shouldReloadLogs, todayFinishView } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
   return {
@@ -97,6 +97,23 @@ describe("TodayExerciseRow", () => {
     expect(html).toContain("修正");
     expect(html).toContain("スクワットの下書きを削除");
   });
+
+  it("drops 未 once the row is synced", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayExerciseRow, {
+        index: 0,
+        name: "スクワット",
+        previous: [],
+        today: [{ ...log("draft-1"), synced: true }],
+        removable: false,
+        onOpen: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    );
+    expect(html).toContain("1件");
+    expect(html).not.toContain("未");
+    expect(html).not.toContain("修正");
+  });
 });
 
 describe("todayFinishView", () => {
@@ -123,6 +140,13 @@ describe("todayFinishView", () => {
   it("keeps 再開する when the menu is closed and Notion has not been sent", () => {
     expect(todayFinishView(true, "open").showResume).toBe(true);
     expect(todayFinishView(false, "open").showEnd).toBe(true);
+  });
+
+  it("reloads rows only when a flush reaches synced", () => {
+    expect(shouldReloadLogs("flushing")).toBe(false);
+    expect(shouldReloadLogs("failed")).toBe(false);
+    expect(shouldReloadLogs("open")).toBe(false);
+    expect(shouldReloadLogs("synced")).toBe(true);
   });
 });
 

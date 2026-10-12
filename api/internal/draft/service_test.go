@@ -595,3 +595,86 @@ func TestAcceptFailureLetsTheDraftBeEditedAgain(t *testing.T) {
 		t.Fatalf("status = %+v %v", listed, err)
 	}
 }
+
+func TestSameJobDoesNotStealALiveLease(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	inner := &fakeWriter{}
+	writer := &gateWriter{inner: inner, entered: make(chan struct{}), release: make(chan struct{})}
+	svc := New(store, dayplan.NewMemory(), writer)
+	if _, err := svc.Create(ctx, userID, input(80), now); err != nil {
+		t.Fatal(err)
+	}
+	var job FlushJob
+	if _, err := svc.Accept(ctx, userID, "2026-10-02", now, func(_ context.Context, got FlushJob) error {
+		job = got
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RunAccepted(ctx, job.UserID, job.Date, now, job.Lease)
+		done <- err
+	}()
+	select {
+	case <-writer.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flush did not reach Notion")
+	}
+	dup := make(chan error, 1)
+	go func() {
+		_, err := svc.RunAccepted(ctx, job.UserID, job.Date, now, job.Lease)
+		dup <- err
+	}()
+	select {
+	case err := <-dup:
+		if !errors.As(err, new(BusyError)) || inner.calls != 0 {
+			t.Fatalf("duplicate job = %v calls %d", err, inner.calls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("duplicate job stole the live lease")
+	}
+	close(writer.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("holding flush did not finish")
+	}
+	if inner.calls != 1 {
+		t.Fatalf("notion creates = %d", inner.calls)
+	}
+
+	key, err := ddb.DraftDayKey(userID, "2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day, err := store.GetDay(ctx, key.PK, key.SK)
+	if err != nil || day == nil || len(day.Drafts) != 1 {
+		t.Fatal(err)
+	}
+	day.Synced = false
+	day.Drafts[0].NotionPageID = ""
+	day.FlushStatus = flushRunning
+	day.FlushJobLease = job.Lease
+	day.FlushLeaseToken = "worker-still-running"
+	day.FlushLeaseUntil = now.Add(time.Minute).Unix()
+	if err := store.PutDay(ctx, *day, day.Version, true); err != nil {
+		t.Fatal(err)
+	}
+	held, err := svc.RunAccepted(ctx, job.UserID, job.Date, now, job.Lease)
+	if !errors.As(err, new(BusyError)) || held.Synced || inner.calls != 1 {
+		t.Fatalf("live same job = %+v calls %d err %v", held, inner.calls, err)
+	}
+	day.FlushLeaseUntil = now.Add(-time.Second).Unix()
+	if err := store.PutDay(ctx, *day, day.Version, true); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.RunAccepted(ctx, job.UserID, job.Date, now, job.Lease)
+	if err != nil || !again.Synced || inner.calls != 2 {
+		t.Fatalf("expired same job = %+v calls %d err %v", again, inner.calls, err)
+	}
+}
