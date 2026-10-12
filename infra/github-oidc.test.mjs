@@ -144,9 +144,10 @@ describe("GitHub OIDC bootstrap", () => {
 
   it("allows HTTP API stage tagging on this region's /apis ARN only", () => {
     const policy = template.slice(
-      template.indexOf("HttpApiStageTagPolicy:"),
+      template.indexOf("DeployHttpApiStageTagPolicy:"),
       template.indexOf("Outputs:"),
     );
+    expect(template).not.toMatch(/^  HttpApiStageTagPolicy:/m);
     expect(policy).toContain("Type: AWS::IAM::ManagedPolicy");
     expect(policy).toContain("ManagedPolicyName: kintore-memo-gha-deploy-http-api-tags");
     expect(policy).not.toContain("Roles:");
@@ -160,7 +161,7 @@ describe("GitHub OIDC bootstrap", () => {
 
     const role = template.slice(template.indexOf("GitHubDeployRole:"), template.indexOf("DeployCfnSamPolicy:"));
     expect(role).toContain("ManagedPolicyArns:");
-    expect(role).toContain("!Ref HttpApiStageTagPolicy");
+    expect(role).toContain("!Ref DeployHttpApiStageTagPolicy");
     expect(role).not.toContain("Policies:");
   });
 
@@ -177,7 +178,7 @@ describe("GitHub OIDC bootstrap", () => {
         "DeployLambdaIamPolicy",
         "DeployLogsHttpApiPolicy",
         "DeployDataEdgePolicy",
-        "HttpApiStageTagPolicy",
+        "DeployHttpApiStageTagPolicy",
       ],
     });
     expect(role.managedPolicyRefs.length).toBeLessThanOrEqual(MANAGED_POLICIES_PER_ROLE);
