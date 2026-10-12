@@ -15,10 +15,16 @@ import (
 
 const pageTitle = "－"
 
-// PageWriter creates one Notion page. AppendLog must return the page even when
-// a following cache delete fails, so the caller can store the page id.
+// flushLeaseFor outlives the flush Lambda (120s) and the API Lambda (20s).
+// The lease is cleared when this flush returns. Until then, another finish
+// does not call Notion.
+const flushLeaseFor = 150 * time.Second
+
+// PageWriter creates one Notion page for a draft id.
+// AppendLog must look up that id before creating, and must return the page
+// even when a following cache delete fails, so the caller can store the page id.
 type PageWriter interface {
-	AppendLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error)
+	AppendLog(ctx context.Context, draftID string, input model.NewExerciseLog) (model.ExerciseLog, error)
 }
 
 // Service is draft CRUD and the idempotent Notion flush.
@@ -265,73 +271,97 @@ func (s *Service) Due(ctx context.Context, now time.Time) ([]ddb.PendingDay, err
 // closeDay is the manual 「終了」 path: an empty day is still closed.
 // The nightly job passes closeDay false and must only call this for due dates.
 // A second call does not create another Notion page for a row that already has an id.
-func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time, closeDay bool) (FinishResult, error) {
-	if _, err := ddb.AssertUserID(userID); err != nil {
+// Overlapping calls take a conditional lease on the DraftDay item. The writer
+// looks up the draft id in Notion before creating a page.
+func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time, closeDay bool) (result FinishResult, err error) {
+	if _, err = ddb.AssertUserID(userID); err != nil {
 		return FinishResult{}, err
 	}
-	if _, err := ddb.AssertISODate(date); err != nil {
+	if _, err = ddb.AssertISODate(date); err != nil {
 		return FinishResult{}, err
 	}
 	if !closeDay {
-		due, err := ddb.IsAutoFlushDue(date, now)
+		var due bool
+		due, err = ddb.IsAutoFlushDue(date, now)
 		if err != nil {
 			return FinishResult{}, err
 		}
 		if !due {
 			return FinishResult{Date: date, Synced: false}, nil
 		}
-	} else if err := s.writable(userID, date, now); err != nil {
+	} else if err = s.writable(userID, date, now); err != nil {
 		return FinishResult{}, err
 	}
+	owner, err := newDraftID()
+	if err != nil {
+		return FinishResult{}, err
+	}
+	held := false
+	defer func() {
+		if !held {
+			return
+		}
+		_ = s.releaseLease(ctx, userID, date, now, owner)
+	}()
 	created := 0
 	for {
-		item, found, err := s.loadDay(ctx, userID, date)
-		if err != nil {
-			return FinishResult{}, err
+		item, found, loadErr := s.loadDay(ctx, userID, date)
+		if loadErr != nil {
+			return FinishResult{}, loadErr
 		}
-		if !found {
-			if !closeDay {
-				if err := s.removePending(ctx, userID, date, now); err != nil {
-					return FinishResult{}, err
-				}
-				return FinishResult{Date: date, Flushed: created, Synced: true}, nil
+		if !found && !closeDay {
+			if err = s.removePending(ctx, userID, date, now); err != nil {
+				return FinishResult{}, err
 			}
-			if _, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+			held = false
+			return FinishResult{Date: date, Flushed: created, Synced: true}, nil
+		}
+		if found && item.Synced {
+			break
+		}
+		if !held {
+			if err = s.acquireLease(ctx, userID, date, now, owner); err != nil {
+				return FinishResult{Date: date, Flushed: created, Synced: false}, err
+			}
+			held = true
+			continue
+		}
+		if found && leaseHeldByOther(item, now, owner) {
+			held = false
+			return FinishResult{Date: date, Flushed: created, Synced: false}, BusyError{}
+		}
+		var pending *ddb.DraftRow
+		if found {
+			for i := range item.Drafts {
+				if item.Drafts[i].NotionPageID == "" {
+					pending = &item.Drafts[i]
+					break
+				}
+			}
+		}
+		if pending == nil {
+			if _, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
 				day.Synced = true
+				day.FlushLeaseToken = ""
+				day.FlushLeaseUntil = 0
 				if day.Drafts == nil {
 					day.Drafts = []ddb.DraftRow{}
 				}
 				return nil
 			}); err != nil {
-				return FinishResult{}, err
-			}
-			break
-		}
-		if item.Synced {
-			break
-		}
-		var pending *ddb.DraftRow
-		for i := range item.Drafts {
-			if item.Drafts[i].NotionPageID == "" {
-				pending = &item.Drafts[i]
-				break
-			}
-		}
-		if pending == nil {
-			if _, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
-				day.Synced = true
-				return nil
-			}); err != nil {
-				return FinishResult{}, err
+				return FinishResult{Date: date, Flushed: created, Synced: false}, err
 			}
 			break
 		}
 		row := *pending
-		pageID, err := s.writePage(ctx, date, row)
-		if err != nil {
-			return FinishResult{Date: date, Flushed: created, Synced: false}, err
+		pageID, writeErr := s.writePage(ctx, date, row)
+		if writeErr != nil {
+			return FinishResult{Date: date, Flushed: created, Synced: false}, writeErr
 		}
-		if _, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+		if _, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+			if leaseHeldByOther(*day, now, owner) {
+				return BusyError{}
+			}
 			for i := range day.Drafts {
 				if day.Drafts[i].ID == row.ID && day.Drafts[i].NotionPageID == "" {
 					day.Drafts[i].NotionPageID = pageID
@@ -344,20 +374,55 @@ func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time,
 		}
 		created++
 	}
-	if err := s.markFinished(ctx, userID, date, now); err != nil {
+	if err = s.markFinished(ctx, userID, date, now); err != nil {
 		return FinishResult{Date: date, Flushed: created, Synced: false}, err
 	}
-	if err := s.removePending(ctx, userID, date, now); err != nil {
+	if err = s.removePending(ctx, userID, date, now); err != nil {
 		return FinishResult{Date: date, Flushed: created, Synced: false}, err
 	}
+	held = false
 	return FinishResult{Date: date, Flushed: created, Synced: true}, nil
+}
+
+func leaseHeldByOther(day ddb.DraftDayItem, now time.Time, owner string) bool {
+	if day.FlushLeaseToken == "" || day.FlushLeaseUntil <= now.Unix() {
+		return false
+	}
+	return day.FlushLeaseToken != owner
+}
+
+func (s *Service) acquireLease(ctx context.Context, userID, date string, now time.Time, owner string) error {
+	_, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+		if day.Synced {
+			return errNoWrite
+		}
+		if leaseHeldByOther(*day, now, owner) {
+			return BusyError{}
+		}
+		day.FlushLeaseToken = owner
+		day.FlushLeaseUntil = now.Add(flushLeaseFor).Unix()
+		return nil
+	})
+	return err
+}
+
+func (s *Service) releaseLease(ctx context.Context, userID, date string, now time.Time, owner string) error {
+	_, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+		if day.FlushLeaseToken != owner {
+			return errNoWrite
+		}
+		day.FlushLeaseToken = ""
+		day.FlushLeaseUntil = 0
+		return nil
+	})
+	return err
 }
 
 func (s *Service) writePage(ctx context.Context, date string, row ddb.DraftRow) (string, error) {
 	if s.writer == nil {
 		return "", errors.New("Notion の設定がありません")
 	}
-	created, err := s.writer.AppendLog(ctx, model.NewExerciseLog{
+	created, err := s.writer.AppendLog(ctx, row.ID, model.NewExerciseLog{
 		Exercise:   row.Exercise,
 		WeightKg:   row.WeightKg,
 		Reps:       row.Reps,
@@ -439,7 +504,10 @@ func (s *Service) markFinished(ctx context.Context, userID, date string, now tim
 	return nil
 }
 
-var errDeleteDay = errors.New("delete draft day")
+var (
+	errDeleteDay = errors.New("delete draft day")
+	errNoWrite   = errors.New("draft day unchanged")
+)
 
 func (s *Service) updateDay(ctx context.Context, userID, date string, now time.Time, fn func(*ddb.DraftDayItem) error) (ddb.DraftDayItem, error) {
 	key, err := ddb.DraftDayKey(userID, date)
@@ -466,6 +534,12 @@ func (s *Service) updateDay(ctx context.Context, userID, date string, now time.T
 			}
 		}
 		if err := fn(&current); err != nil {
+			if errors.Is(err, errNoWrite) {
+				if !found {
+					return ddb.DraftDayItem{}, nil
+				}
+				return current, nil
+			}
 			if errors.Is(err, errDeleteDay) {
 				if !found {
 					return ddb.DraftDayItem{}, nil

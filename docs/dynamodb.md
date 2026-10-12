@@ -95,9 +95,11 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | `synced` | Boolean | その日を Notion に反映し終えたら true |
 | `updatedAt` | String | 書き込み時刻（ISO-8601、UTC） |
 | `version` | Number | 条件付き書き込みの版 |
+| `flushLeaseToken` | String | 反映中の呼び出しを識別する。空なら誰も持っていない |
+| `flushLeaseUntil` | Number | そのリースの期限（Unix 秒）。期限のあと別の反映が引き継げる |
 | `ttl` | Number | 下表 |
 
-`notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。
+`notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。ページ ID が空でも、Notion の `下書きID`（下書きの UUID）が同じ行があれば、そのページを再利用してから ID を保存します。反映中は `flushLeaseToken` を条件付きで書き、重なった終了は Notion を呼びません。
 
 ## FlushIndex の属性
 

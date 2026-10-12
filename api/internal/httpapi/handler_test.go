@@ -97,6 +97,10 @@ func (f *fakeBackend) GetLogOnDate(context.Context, string, string) ([]model.Exe
 	return []model.ExerciseLog{}, nil
 }
 
+func (f *fakeBackend) FindOrCreateLog(ctx context.Context, _ string, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	return f.CreateLog(ctx, input)
+}
+
 func (f *fakeBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
 	f.created++
 	f.calls = append(f.calls, "create")

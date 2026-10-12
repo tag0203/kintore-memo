@@ -183,11 +183,11 @@ func (s *Service) CreateLog(ctx context.Context, input model.NewExerciseLog) (mo
 	return created, nil
 }
 
-// AppendLog writes a Notion page for a draft flush.
+// AppendLog writes one draft to Notion, or reuses the page that already has its id.
 // A cache delete failure is logged and ignored so the caller can store the page id.
 // The log line does not include the error text.
-func (s *Service) AppendLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
-	created, err := s.client.CreateLog(ctx, input)
+func (s *Service) AppendLog(ctx context.Context, draftID string, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	created, err := s.client.FindOrCreateLog(ctx, draftID, input)
 	if err != nil {
 		return model.ExerciseLog{}, err
 	}

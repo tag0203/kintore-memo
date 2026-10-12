@@ -553,6 +553,10 @@ func (h *Handler) draftHistory(ctx context.Context, event events.APIGatewayV2HTT
 }
 
 func (h *Handler) draftHTTPError(ctx context.Context, event events.APIGatewayV2HTTPRequest, err error) (events.APIGatewayV2HTTPResponse, bool) {
+	var busy draft.BusyError
+	if errors.As(err, &busy) {
+		return jsonResponse(409, map[string]string{"error": busy.Error()}), true
+	}
 	var conflict draft.ConflictError
 	if errors.As(err, &conflict) {
 		return jsonResponse(409, map[string]string{"error": conflict.Error()}), true

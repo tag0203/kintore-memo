@@ -18,6 +18,7 @@ func TestWorkoutSchemaAndPage(t *testing.T) {
 		"セット数":   map[string]any{"type": "number"},
 		"きつさ":    map[string]any{"type": "select"},
 		"日付":     map[string]any{"type": "date"},
+		"下書きID":  map[string]any{"type": "rich_text"},
 	}
 	title, err := AssertWorkoutSchema(schema)
 	if err != nil || title != "名前" {
@@ -67,5 +68,16 @@ func TestWorkoutSchemaAndPage(t *testing.T) {
 	}
 	if props["きつさ"].(map[string]any)["select"].(map[string]any)["name"] != "きつい" {
 		t.Fatal(props["きつさ"])
+	}
+	withID := withDraftID(body, "11111111-2222-4333-8444-555555555555")
+	draftProp := withID["properties"].(map[string]any)["下書きID"].(map[string]any)
+	text := draftProp["rich_text"].([]any)[0].(map[string]any)["text"].(map[string]any)["content"]
+	if text != "11111111-2222-4333-8444-555555555555" {
+		t.Fatal(draftProp)
+	}
+	without := schema
+	delete(without, "下書きID")
+	if _, err := AssertWorkoutSchema(without); err == nil || err.Error() != "プロパティ「下書きID」がありません" {
+		t.Fatalf("missing draft id: %v", err)
 	}
 }

@@ -198,6 +198,61 @@ func TestSameDayQueriesKeepEveryRowOfThatExercise(t *testing.T) {
 	}
 }
 
+func TestFindOrCreateLogReusesTheDraftID(t *testing.T) {
+	const draftID = "11111111-2222-4333-8444-555555555555"
+	var posts atomic.Int32
+	created := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/databases/db-1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data_sources": []any{map[string]any{"id": "ds-1"}}})
+		case r.URL.Path == "/data_sources/ds-1" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": workoutProps()})
+		case strings.HasSuffix(r.URL.Path, "/query"):
+			raw, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(raw), draftID) || !strings.Contains(string(raw), "下書きID") {
+				t.Errorf("query = %s", raw)
+			}
+			if !created {
+				_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{}, "has_more": false})
+				return
+			}
+			kept := workoutPage()
+			kept["id"] = "page-kept"
+			_ = json.NewEncoder(w).Encode(map[string]any{"results": []any{kept}, "has_more": false})
+		case r.URL.Path == "/pages" && r.Method == http.MethodPost:
+			raw, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(raw), draftID) || !strings.Contains(string(raw), "下書きID") {
+				t.Errorf("create = %s", raw)
+			}
+			posts.Add(1)
+			created = true
+			page := workoutPage()
+			page["id"] = "page-kept"
+			_ = json.NewEncoder(w).Encode(page)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient("test-token", "db-1", server.Client())
+	client.baseURL = server.URL
+	input := model.NewExerciseLog{
+		Exercise: "スクワット", WeightKg: 80, Reps: 8, Sets: 3, Difficulty: 4, Date: "2026-10-02",
+	}
+	first, err := client.FindOrCreateLog(context.Background(), draftID, input)
+	if err != nil || first.ID != "page-kept" || posts.Load() != 1 {
+		t.Fatalf("first = %+v posts %d err %v", first, posts.Load(), err)
+	}
+	second, err := client.FindOrCreateLog(context.Background(), draftID, input)
+	if err != nil || second.ID != "page-kept" || posts.Load() != 1 {
+		t.Fatalf("second = %+v posts %d err %v", second, posts.Load(), err)
+	}
+	if _, err := client.FindOrCreateLog(context.Background(), "not-a-uuid", input); err == nil {
+		t.Fatal("expected draft id rejection")
+	}
+}
+
 func logPage(id, exercise string, weight float64, created, date string) map[string]any {
 	page := workoutPage()
 	page["id"] = id
@@ -218,6 +273,7 @@ func workoutProps() map[string]any {
 		"セット数":   map[string]any{"type": "number"},
 		"きつさ":    map[string]any{"type": "select"},
 		"日付":     map[string]any{"type": "date"},
+		"下書きID":  map[string]any{"type": "rich_text"},
 	}
 }
 

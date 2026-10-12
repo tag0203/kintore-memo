@@ -12,6 +12,13 @@ import (
 // ErrVersionConflict is a lost compare-and-swap. Callers retry.
 var ErrVersionConflict = errors.New("draft version conflict")
 
+// BusyError is a 409. Another flush holds this day's lease.
+type BusyError struct{}
+
+func (BusyError) Error() string {
+	return "反映しています。少し待ってからもう一度終了してください"
+}
+
 // ConflictError is a 409. The day or the row was already written to Notion.
 type ConflictError struct{}
 
