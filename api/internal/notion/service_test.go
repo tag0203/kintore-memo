@@ -81,6 +81,10 @@ func (b *countingBackend) GetLogOnDate(_ context.Context, exercise, date string)
 	return []model.ExerciseLog{}, nil
 }
 
+func (b *countingBackend) FindOrCreateLog(ctx context.Context, _ string, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	return b.CreateLog(ctx, input)
+}
+
 func (b *countingBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
 	b.mu.Lock()
 	b.calls = append(b.calls, "create")
@@ -285,6 +289,10 @@ func (b *appendingBackend) GetPreviousLog(context.Context, string, string) ([]mo
 
 func (b *appendingBackend) GetLogOnDate(context.Context, string, string) ([]model.ExerciseLog, error) {
 	return nil, nil
+}
+
+func (b *appendingBackend) FindOrCreateLog(ctx context.Context, _ string, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	return b.CreateLog(ctx, input)
 }
 
 func (b *appendingBackend) CreateLog(_ context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {

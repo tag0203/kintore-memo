@@ -28,7 +28,7 @@ var labelToDifficulty = map[string]int{
 }
 
 var properties = struct {
-	Exercise, Weight, Reps, Sets, Difficulty, Date string
+	Exercise, Weight, Reps, Sets, Difficulty, Date, DraftID string
 }{
 	Exercise:   "種目",
 	Weight:     "重量（kg）",
@@ -36,6 +36,7 @@ var properties = struct {
 	Sets:       "セット数",
 	Difficulty: "きつさ",
 	Date:       "日付",
+	DraftID:    "下書きID",
 }
 
 var expectedTypes = []struct{ name, typ string }{
@@ -45,6 +46,7 @@ var expectedTypes = []struct{ name, typ string }{
 	{properties.Sets, "number"},
 	{properties.Difficulty, "select"},
 	{properties.Date, "date"},
+	{properties.DraftID, "rich_text"},
 }
 
 // AssertWorkoutSchema finds the title column and checks the workout properties.
@@ -133,6 +135,16 @@ func buildRecentQuery() map[string]any {
 	}
 }
 
+func buildDraftIDQuery(draftID string) map[string]any {
+	return map[string]any{
+		"filter": map[string]any{
+			"property":  properties.DraftID,
+			"rich_text": map[string]any{"equals": draftID},
+		},
+		"page_size": 1,
+	}
+}
+
 func buildCreatePageBody(dataSourceID, titleProperty string, input model.NewExerciseLog) map[string]any {
 	title := trim(input.Title)
 	if title == "" {
@@ -153,6 +165,24 @@ func buildCreatePageBody(dataSourceID, titleProperty string, input model.NewExer
 			properties.Date:       map[string]any{"type": "date", "date": map[string]any{"start": input.Date}},
 		},
 	}
+}
+
+func withDraftID(body map[string]any, draftID string) map[string]any {
+	if draftID == "" {
+		return body
+	}
+	props, _ := body["properties"].(map[string]any)
+	if props == nil {
+		return body
+	}
+	props[properties.DraftID] = map[string]any{
+		"type": "rich_text",
+		"rich_text": []any{map[string]any{
+			"type": "text",
+			"text": map[string]any{"content": draftID},
+		}},
+	}
+	return body
 }
 
 // PageToLog maps one Notion page. Incomplete rows are skipped.

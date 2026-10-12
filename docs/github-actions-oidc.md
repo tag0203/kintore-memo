@@ -166,7 +166,8 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 | --- | --- |
 | CloudFormation | スタック `kintore-memo-dev` / `staging` / `prod` と、SAM が成果物バケットに使う `aws-sam-cli-managed-default`。SAM Transform。`ValidateTemplate` のみリソース `*` |
 | S3 | SPA バケット `kintore-memo-*-spa-<account>` と SAM 管理バケット。`ListAllMyBuckets` のみ `*`。ACL の付与はしない |
-| Lambda / ログ | 関数名 `kintore-memo-*-api`（`PutFunctionConcurrency` / `DeleteFunctionConcurrency` を含む）と、そのロググループ、および `/aws/apigateway/kintore-memo-*-http`。`logs:DescribeLogGroups` はリソースを指定できないので `*` |
+| Lambda / ログ | 関数名 `kintore-memo-*-api` と `kintore-memo-*-flush`（`PutFunctionConcurrency` / `DeleteFunctionConcurrency` を含む）と、そのロググループ、および `/aws/apigateway/kintore-memo-*-http`。`logs:DescribeLogGroups` はリソースを指定できないので `*` |
+| EventBridge | ルール `rule/kintore-memo-*` への `PutRule` / `DeleteRule` / `DescribeRule` / `EnableRule` / `DisableRule` / `PutTargets` / `RemoveTargets` / `ListTargetsByRule` / `ListTagsForResource` / `TagResource` / `UntagResource`。Scheduler 用のロールは作らない |
 | IAM | ロール `kintore-memo-*-api` の作成・更新は **PermissionsBoundary `kintore-memo-api-permissions-boundary` 付きに限定**。境界の削除は拒否。`iam:PassRole` は `lambda.amazonaws.com` だけ。API Gateway のサービスリンクロールを一度だけ作る権限 |
 | DynamoDB | テーブル `kintore-memo-dev` / `staging` / `prod` |
 | HTTP API | そのリージョンの `/apis` と `/tags`（GET/POST/PUT/PATCH/DELETE）。ステージの `AccessLogSettings` 更新もこの `PATCH` / `PUT` に含まれる。ステージのタグ付けだけ `apigateway:TagResource` / `UntagResource` を `/apis` と `/apis/*` に追加。`/tags` や全リソースには付けない |
@@ -177,7 +178,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 意図的に外しているもの:
 
 - Lambda ロググループに対する `logs:DescribeLogStreams` / `GetLogEvents` / `FilterLogEvents`。HTTP API のアクセスログを有効にするとき AWS がこの 3 つを要求するので、アクセスロググループにだけ付ける
-- Lambda 実行ロールの PermissionsBoundary の拡大。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、実行中の Lambda の権限ではない
+- デプロイロールへの `lambda:InvokeFunction`。終了の非同期呼び出しは API の実行ロールだけが行い、境界 `kintore-memo-api-permissions-boundary` が関数 `kintore-memo-*-flush` への `lambda:InvokeFunction` を許す。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、デプロイロールの権限ではない
 - アクセスキーの作成（明示的に拒否）
 - Notion 用 SSM（`/kintore-memo/*/notion/*`）の読み書き（明示的に拒否）。ただし境界導入後も、正当な API ロール経由の Notion 読取は Lambda コード変更で間接利用され得る。デプロイ担当が SSM を直接読めないことと、Lambda が読めないことは別
 - スタックの削除（`cloudformation:DeleteStack` は付けていません。削除は手元の管理者で行います）
@@ -224,6 +225,33 @@ aws cloudformation describe-stacks \
 `UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。予約同時実行の値は `0` のままです。上げる手順は [aws-deploy.md](./aws-deploy.md) です。値を変えるだけなら、このスタックの再適用は要りません。
 
 同じファイルには、CloudFront のレスポンスヘッダーポリシー用に `cloudfront:CreateResponseHeadersPolicy`（リソース `*`）と、`response-headers-policy/*` への `GetResponseHeadersPolicy` / `GetResponseHeadersPolicyConfig` / `UpdateResponseHeadersPolicy` / `DeleteResponseHeadersPolicy` も入っています。アクセスログ用にこのスタックを更新済みでも、その更新にはこの CloudFront 権限は含まれません。セキュリティヘッダーを `main` に入れる前に、上と同じコマンドをこのツリーで再実行し、`StackStatus` が `UPDATE_COMPLETE` であることを確認してください。確認は `StackStatus` だけです。ロール ARN は出しません。
+
+## 下書きの自動反映を先に適用する
+
+`infra/github-oidc.yaml` に、関数 `kintore-memo-*-flush`、そのロググループ、EventBridge ルール `rule/kintore-memo-*` の権限を足しています。境界ポリシー `kintore-memo-api-permissions-boundary` も、flush 関数のロググループへの `logs:CreateLogStream` と `logs:PutLogEvents` を許可します。同じ境界に `lambda:InvokeFunction` を、関数 `kintore-memo-*-flush` とそのバージョンへ足しています。API ロールが終了を非同期で渡すためです。デプロイロール自体には `lambda:InvokeFunction` を足していません。アプリの `sam deploy` より先に、手元の管理者でスタック `kintore-memo-github-oidc` を更新します。Actions からは更新しません。境界を更新する前にアプリをデプロイすると、ロールのポリシーは書けても、実行時の Invoke は境界で拒否されます。
+
+`main` は PR 必須です。マージ後、CI が成功すると `workflow_run` で `dev` が自動デプロイされます。先にこのスタックを更新しないと、そのデプロイが権限不足で失敗します。この変更を含むツリーで、リポジトリルートから実行します。
+
+```bash
+aws cloudformation deploy \
+  --template-file infra/github-oidc.yaml \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --no-fail-on-empty-changeset
+```
+
+成功の確認はスタックの状態だけを見ます。ロール ARN や他の出力は出しません。
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name kintore-memo-github-oidc \
+  --region ap-northeast-1 \
+  --query "Stacks[0].StackStatus" \
+  --output text
+```
+
+`UPDATE_COMPLETE` になってから、アプリ側の変更を `main` にマージします。
 
 ## デプロイの実行
 

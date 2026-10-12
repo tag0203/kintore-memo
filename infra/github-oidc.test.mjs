@@ -44,7 +44,34 @@ describe("GitHub OIDC bootstrap", () => {
     expect(statement).toContain("lambda:PutFunctionConcurrency");
     expect(statement).toContain("lambda:DeleteFunctionConcurrency");
     expect(statement).toContain("function:kintore-memo-*-api");
+    expect(statement).toContain("function:kintore-memo-*-flush");
     expect(statement).not.toContain('Resource: "*"');
+  });
+
+  it("can manage the flush function log group and its EventBridge rule", () => {
+    const boundary = template.slice(
+      template.indexOf("ApiFunctionPermissionsBoundary:"),
+      template.indexOf("GitHubDeployRole:"),
+    );
+    expect(boundary).toContain("log-group:/aws/lambda/kintore-memo-*-flush");
+    expect(boundary).toContain("log-group:/aws/lambda/kintore-memo-*-flush:*");
+    expect(boundary).toContain("lambda:InvokeFunction");
+    expect(boundary).toContain("function:kintore-memo-*-flush");
+    expect(boundary).not.toContain('Resource: "*"');
+
+    const groups = template.slice(template.indexOf("Sid: ApiLogGroups"), template.indexOf("Sid: HttpApiAccessLogDelivery"));
+    expect(groups).toContain("log-group:/aws/lambda/kintore-memo-*-flush");
+    expect(groups).not.toContain('Resource: "*"');
+
+    const rules = template.slice(
+      template.indexOf("Sid: EventBridgeFlushRules"),
+      template.indexOf("Sid: DenyNotionParameterAccess"),
+    );
+    for (const action of ["events:PutRule", "events:PutTargets", "events:DeleteRule", "events:RemoveTargets"]) {
+      expect(rules).toContain(action);
+    }
+    expect(rules).toContain("rule/kintore-memo-*");
+    expect(rules).not.toContain('Resource: "*"');
   });
 
   it("can create the HTTP API access log group and the log delivery the stage needs", () => {

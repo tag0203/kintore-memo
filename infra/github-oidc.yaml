@@ -97,6 +97,8 @@ Resources:
             Resource:
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api
               - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api:*
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-flush
+              - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-flush:*
           - Sid: DynamoDBTableAccess
             Effect: Allow
             Action:
@@ -122,6 +124,14 @@ Resources:
             Condition:
               StringEquals:
                 kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+          # The API role invokes the flush function asynchronously. The deploy role does not.
+          - Sid: InvokeFlushFunction
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush:*
 
   # Role name is fixed and does not match kintore-memo-*-api, so this role cannot edit itself.
   GitHubDeployRole:
@@ -252,6 +262,8 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api
                   - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-api:*
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush:*
               - Sid: PassRoleToLambdaOnly
                 Effect: Allow
                 Action: iam:PassRole
@@ -348,6 +360,8 @@ Resources:
                 Resource:
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-api:*
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-flush
+                  - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/kintore-memo-*-flush:*
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http
                   - !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/apigateway/kintore-memo-*-http:*
               # Enabling HTTP API access logs calls CloudWatch Logs delivery as the
@@ -455,6 +469,23 @@ Resources:
                   - cloudfront:UpdateResponseHeadersPolicy
                   - cloudfront:DeleteResponseHeadersPolicy
                 Resource: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:response-headers-policy/*
+              # SAM Schedule creates one EventBridge rule. Not EventBridge Scheduler,
+              # so this role does not pass a scheduler role. Resource is the rule ARN.
+              - Sid: EventBridgeFlushRules
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:EnableRule
+                  - events:DisableRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:ListTargetsByRule
+                  - events:ListTagsForResource
+                  - events:TagResource
+                  - events:UntagResource
+                Resource: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/kintore-memo-*
               - Sid: DenyNotionParameterAccess
                 Effect: Deny
                 Action:

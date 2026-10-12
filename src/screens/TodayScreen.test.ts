@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { Modal } from "../components/Modal";
 import type { ExerciseLog } from "../domain";
-import { SessionDatePicker, TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
+import { SessionDatePicker, TodayExerciseRow, removalConfirmBody, shouldReloadLogs, todayFinishView } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
   return {
@@ -73,6 +73,80 @@ describe("TodayExerciseRow", () => {
     expect(html).toContain("10/10（前日）");
     expect(html).toContain("スクワットを10/10（前日）のメニューから外す");
     expect(html).not.toContain(">今日<");
+  });
+
+  it("shows 未 and keeps 修正 and 削除 outside the card while a row is unsynced", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayExerciseRow, {
+        index: 0,
+        name: "スクワット",
+        previous: [],
+        today: [{ ...log("draft-1"), synced: false }],
+        removable: false,
+        onOpen: vi.fn(),
+        onRemove: vi.fn(),
+        onEditDraft: vi.fn(),
+        onDeleteDraft: vi.fn(),
+      }),
+    );
+    const card = html.slice(0, html.indexOf("</button>") + "</button>".length);
+    expect(card).toContain("未");
+    expect(card).not.toContain("is-done");
+    expect(card).not.toContain("修正");
+    expect(card).not.toContain("削除");
+    expect(html).toContain("修正");
+    expect(html).toContain("スクワットの下書きを削除");
+  });
+
+  it("drops 未 once the row is synced", () => {
+    const html = renderToStaticMarkup(
+      createElement(TodayExerciseRow, {
+        index: 0,
+        name: "スクワット",
+        previous: [],
+        today: [{ ...log("draft-1"), synced: true }],
+        removable: false,
+        onOpen: vi.fn(),
+        onRemove: vi.fn(),
+      }),
+    );
+    expect(html).toContain("1件");
+    expect(html).not.toContain("未");
+    expect(html).not.toContain("修正");
+  });
+});
+
+describe("todayFinishView", () => {
+  it("hides 再開する after the day was sent to Notion", () => {
+    expect(todayFinishView(true, "synced")).toEqual({
+      showResume: false,
+      showAdd: false,
+      showEnd: false,
+      showRetry: false,
+      message: "送信済み。修正は Notion で",
+    });
+  });
+
+  it("shows 反映中 while the worker is writing, and a retry after failure", () => {
+    expect(todayFinishView(true, "flushing").message).toBe("反映中");
+    expect(todayFinishView(true, "flushing").showResume).toBe(false);
+    expect(todayFinishView(true, "failed")).toMatchObject({
+      showResume: false,
+      showRetry: true,
+      message: "失敗。もう一度終了を",
+    });
+  });
+
+  it("keeps 再開する when the menu is closed and Notion has not been sent", () => {
+    expect(todayFinishView(true, "open").showResume).toBe(true);
+    expect(todayFinishView(false, "open").showEnd).toBe(true);
+  });
+
+  it("reloads rows only when a flush reaches synced", () => {
+    expect(shouldReloadLogs("flushing")).toBe(false);
+    expect(shouldReloadLogs("failed")).toBe(false);
+    expect(shouldReloadLogs("open")).toBe(false);
+    expect(shouldReloadLogs("synced")).toBe(true);
   });
 });
 

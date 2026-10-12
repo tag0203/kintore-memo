@@ -16,14 +16,16 @@ Issue [#11](https://github.com/tag0203/kintore-memo/issues/11)。アプリ固有
 | GSI / LSI / Stream | なし。読み取りは `pk` + `sk` が分かっているときだけ |
 | PITR | オフ |
 
-エンティティは次の 2 つだけです。
+エンティティは次の 4 つです。
 
 | entityType | 役割 | 誰が読むか |
 | --- | --- | --- |
 | `DayPlan` | その日のメニュー、部位メモ、終了状態 | [#6](https://github.com/tag0203/kintore-memo/issues/6) |
 | `NotionCache` | Notion API 応答の短いキャッシュ（任意） | [#10](https://github.com/tag0203/kintore-memo/issues/10) |
+| `DraftDay` | その日の未反映の記録。終了で Notion に書き、反映済みにする | [#49](https://github.com/tag0203/kintore-memo/issues/49) |
+| `FlushIndex` | 未反映のユーザーと日付の一覧。夜間ジョブがこの 1 項目だけ読む | [#49](https://github.com/tag0203/kintore-memo/issues/49) |
 
-置かないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態、重量・回数・セット・きつさの記録行。種目の「最近」は Notion の記録日から導出します。キャッシュキーが `exercises#recent` になることはあっても、最近開いたページのエンティティは作りません。
+置かないもの: お気に入り、最近開いたページ、長い編集履歴、ジョブ状態。種目の「最近」は Notion の記録日から導出します。キャッシュキーが `exercises#recent` になることはあっても、最近開いたページのエンティティは作りません。反映済みの記録の正は Notion のままです。アプリは反映済みの行を修正も削除もしません。
 
 ## キー
 
@@ -35,6 +37,14 @@ DayPlan
 NotionCache
   pk = CACHE#notion
   sk = <segment>(#<segment>){0,3}
+
+DraftDay
+  pk = USER#<cognito-sub>
+  sk = DRAFTS#<YYYY-MM-DD>
+
+FlushIndex
+  pk = FLUSH#pending
+  sk = INDEX
 ```
 
 `cognito-sub` は API Gateway JWT の `sub` をそのまま使います。UUID です。リクエスト本文のユーザー ID ではキーを作りません。
@@ -71,6 +81,40 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 
 `api/internal/ddb` の `BuildDayPlanItem` は、この属性以外を受け取りません。
 
+## DraftDay の属性
+
+1 ユーザー・1 日付につき 1 項目です。その日の下書きを `drafts` に並べます。一覧は `GetItem` で足りるので、Query は使いません。
+
+| 属性 | 型 | 内容 |
+| --- | --- | --- |
+| `pk` / `sk` | String | 上記 |
+| `entityType` | String | `DraftDay` |
+| `userId` | String | `sub`。`pk` と一致する |
+| `date` | String | `sk` の日付と一致する |
+| `drafts` | List | 最大 40 行。各行は `id`（UUID）、`exercise`、`weightKg`、`reps`、`sets`、`difficulty`、`title`、`createdAt`、`updatedAt`、`notionPageId` |
+| `synced` | Boolean | その日を Notion に反映し終えたら true |
+| `updatedAt` | String | 書き込み時刻（ISO-8601、UTC） |
+| `version` | Number | 条件付き書き込みの版 |
+| `flushLeaseToken` | String | 反映中の呼び出しを識別する。空なら誰も持っていない |
+| `flushLeaseUntil` | Number | そのリースの期限（Unix 秒）。期限のあと別の反映が引き継げる |
+| `flushStatus` | String | `running` または `failed`。空なら反映を始めていない |
+| `flushJobLease` | String | 受け付けた終了の識別子。期限内のリースは、同じ終了の二重配信でも奪えない。期限のあとだけ引き継げる |
+| `ttl` | Number | 下表 |
+
+`notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。ページ ID が空でも、Notion の `下書きID`（下書きの UUID）が同じ行があれば、そのページを再利用してから ID を保存します。`POST /api/day/{date}/finish` は受付だけです。API は `flushLeaseToken` を条件付きで書き、flush 関数を非同期で起動して返します。反映中の作成・修正・削除は 409 です。受付のリースは 60 秒、flush 関数が引き継いだあとは 360 秒です。関数のタイムアウトは 300 秒です。
+
+## FlushIndex の属性
+
+未反映の日を探すための 1 項目です。夜間の Lambda は `GetItem` でこのキーだけ読みます。Scan も Query もしません。
+
+| 属性 | 型 | 内容 |
+| --- | --- | --- |
+| `pk` / `sk` | String | `FLUSH#pending` / `INDEX` |
+| `entityType` | String | `FlushIndex` |
+| `days` | List | `{ userId, date }`。最大 60 件 |
+| `updatedAt` | String | 書き込み時刻（ISO-8601、UTC） |
+| `version` | Number | 条件付き書き込みの版 |
+
 ## NotionCache の属性
 
 | 属性 | 型 | 内容 |
@@ -89,6 +133,8 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | 用途 | entityType | 保持 | 期限の計算 |
 | --- | --- | --- | --- |
 | 今日のメニュー、部位メモ、終了 / 再開 | `DayPlan` | セッション日と、その次の東京の暦日 | `date` の翌々日 0:00（Asia/Tokyo）。例: `2026-10-02` → `2026-10-04 00:00 +09:00`（`2026-10-03T15:00:00Z`） |
+| 未反映の下書き | `DraftDay` | 反映まで。失敗した夜間ジョブのやり直しを含む | `date` の 30 日後 0:00（Asia/Tokyo）。DayPlan より長く残す |
+| 反映済みの下書き | `DraftDay` | 7 日 | 反映が全部成功した時刻 + 7 日 |
 | Notion API 応答 | `NotionCache` | 300 秒 | `floor(now/1000) + 300` |
 
 DayPlan の書き込みは、Asia/Tokyo の当日・前日・翌日の `date` だけ受けます。端末のタイムゾーンと深夜 0 時のずれ用です。遠い日付を書いて履歴にはしません。前日の項目は、東京の翌暦日が終わるまで TTL で残ります。履歴画面のための Query はしません。
@@ -105,7 +151,7 @@ DayPlan の書き込みは、Asia/Tokyo の当日・前日・翌日の `date` �
 | キャッシュを書く | `PutItem` | Go API（#10） |
 | キャッシュを捨てる | `DeleteItem` | Go API（#10） |
 
-Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` だけを `AppTable` の ARN に許可します。#6 が使うのは `GetItem` と `PutItem` です。GSI が無いので `index/*` は付けません。`Scan` と `Query` と Batch は付けません。ユーザーごとの分離は IAM 条件ではなく、ハンドラが `sub` から `pk` を組むことで行います。
+Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `PutItem` / `UpdateItem` / `DeleteItem` だけを `AppTable` の ARN に許可します。下書きも同じです。条件付きの `PutItem` と `DeleteItem` に追加のアクションは要りません。GSI が無いので `index/*` は付けません。`Scan` と `Query` と Batch は付けません。ユーザーごとの分離は IAM 条件ではなく、ハンドラが `sub` から `pk` を組むことで行います。夜間の反映は同じロールの別 Lambda が、`FlushIndex` の既知キーを `GetItem` します。
 
 環境変数 `TABLE_NAME` がこのテーブル名です。
 
@@ -123,3 +169,17 @@ Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `
 応答は画面のセッションと同じ 5 フィールドです（`date` / `memo` / `exercises` / `finished` / `updatedAt`）。`pk` や `ttl` は返しません。未保存の GET の `updatedAt` は `null` です。重量・回数・セット・きつさが本文にあっても項目には書きません。
 
 画面は Cognito と `VITE_API_BASE_URL` があるとき、この API でその日のメニューを保存し、リロード後に復元します。DayPlan の `GetItem` は強い整合性なので、保存直後の再読み込みでも同じ項目が返ります。どちらかが無いローカルは、これまでどおりメモリ上のシードです。
+
+## 下書き（#49）
+
+保存は Notion に書かず、`DraftDay` に足します。`終了` の `POST /api/day/{date}/finish` は反映を受け付けて `flushing` を返します。Notion への書き込みは flush 関数が行い、各行の `notionPageId` を成功のあとに保存し、全部終わってから `synced` を true にします。画面は `GET /api/drafts` の `status`（`flushing` / `synced` / `failed`）を見ます。同じ日をもう一度終了しても、ページ ID がある行は Notion に書きません。反映中と反映済みの日への作成・修正・削除は 409 です。反映済みの修正は Notion で行います。
+
+書き込みできる日付は DayPlan と同じ、東京の当日・前日・翌日です。終了を押し忘れた日は、その日付が東京時間で 2 日前になったあと（日付 +2 日の 0:00 すぎ）に、毎日 00:10（Asia/Tokyo）の Lambda が反映します。ジョブの cron は UTC の `cron(10 15 * * ? *)` です。失敗した日は次の夜にやり直します。
+
+| メソッド | 経路 | 内容 |
+| --- | --- | --- |
+| POST | `/api/logs` | 下書きを 1 行追加する。Notion は呼ばない |
+| PUT | `/api/logs/{id}` | 未反映の下書きを書き換える |
+| DELETE | `/api/logs/{id}` | 未反映の下書きを消す |
+| GET | `/api/drafts?date=YYYY-MM-DD` | その日の下書き |
+| POST | `/api/day/{date}/finish` | その日を Notion に反映する |

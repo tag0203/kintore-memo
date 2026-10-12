@@ -1,6 +1,6 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
 import { isDifficulty, tokyoCivilDate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
-import type { WorkoutLogClient } from "./client";
+import type { DayFlushStatus, WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { chronological } from "./logRows";
 import { requestIdFromPayload } from "./requestId";
@@ -10,8 +10,8 @@ import { requestIdFromPayload } from "./requestId";
  * Authorization は Cognito の IdToken だけ。Notion のトークンは送らない。
  *
  * セッション開始で GET /api/bootstrap を一括取得し、種目・前回・当日はメモリに置く。
- * 画面遷移の読み取りはキャッシュだけ。API を再呼び出しするのは保存（POST /api/logs）で、
- * 成功した行でキャッシュを更新する。個別の GET /api/logs/* は呼ばない。
+ * 画面遷移の読み取りはキャッシュだけ。API を再呼び出しするのは下書きの保存・修正・削除と、
+ * 終了時の POST /api/day/{date}/finish。成功した行でキャッシュを更新する。個別の GET /api/logs/* は呼ばない。
  *
  * Lambda の bootstrap は種目 40 件まで。それを超える分は起動時の続きの一括取得に分ける。
  */
@@ -93,6 +93,7 @@ function parseLog(value: unknown): ExerciseLog {
   ) {
     throw new Error("記録の取得に失敗しました");
   }
+  const synced = value.synced === true ? true : value.synced === false ? false : undefined;
   return {
     id: value.id,
     exercise: value.exercise,
@@ -103,6 +104,7 @@ function parseLog(value: unknown): ExerciseLog {
     date: value.date,
     title: value.title,
     createdAt: value.createdAt,
+    ...(synced === undefined ? {} : { synced }),
   };
 }
 
@@ -171,6 +173,8 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
   const now = options.now ?? new Date();
 
   let cache: SessionCache | null = null;
+  const closedDates = new Set<string>();
+  const statuses = new Map<string, DayFlushStatus>();
   let pending = new Set<string>();
   let scheduledDate: string | null = null;
   let scheduled: Promise<void> | null = null;
@@ -203,6 +207,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     const payload = await request(bootstrapPath(date, names), { method: "GET" }, "記録の取得に失敗しました");
     // 日付を切り替えたあとに、前の日付の応答でキャッシュを上書きしない。
     if (epoch !== cacheEpoch) return false;
+    rememberStatus(date, readFlushStatus(payload));
     const parsed = parseBootstrap(payload);
     if (!cache || cache.date !== date) {
       cache = { date, exercises: [], logs: new Map(), catalogReady: false };
@@ -307,11 +312,42 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
   function remember(log: ExerciseLog): void {
     if (!cache || cache.date !== log.date) return;
     const current = cache.logs.get(log.exercise) ?? emptyPair();
-    const today = current.today.some((row) => row.id === log.id)
-      ? current.today
-      : chronological([...current.today, log]);
+    const today = chronological([...current.today.filter((row) => row.id !== log.id), log]);
     cache.logs.set(log.exercise, { previous: current.previous, today });
     upsertExercise(log.exercise, log.createdAt);
+  }
+
+  function forget(id: string): void {
+    if (!cache) return;
+    for (const [name, pair] of cache.logs) {
+      if (!pair.today.some((row) => row.id === id)) continue;
+      cache.logs.set(name, { previous: pair.previous, today: pair.today.filter((row) => row.id !== id) });
+    }
+  }
+
+  function readFlushStatus(payload: unknown): DayFlushStatus {
+    if (!isRecord(payload)) return "open";
+    const raw = payload.status ?? payload.flushStatus;
+    if (payload.synced === true || payload.daySynced === true || raw === "synced") return "synced";
+    if (raw === "flushing") return "flushing";
+    if (raw === "failed") return "failed";
+    return "open";
+  }
+
+  function rememberStatus(date: string, status: DayFlushStatus): void {
+    statuses.set(date, status);
+    if (status === "synced") markDaySynced(date);
+  }
+
+  function markDaySynced(date: string): void {
+    closedDates.add(date);
+    if (!cache || cache.date !== date) return;
+    for (const [name, pair] of cache.logs) {
+      cache.logs.set(name, {
+        previous: pair.previous,
+        today: pair.today.map((log) => (log.synced === false ? { ...log, synced: true } : log)),
+      });
+    }
   }
 
   function namesFor(date: string, exercise: string): string[] {
@@ -362,6 +398,54 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
       const created = parseLog(payload);
       remember(created);
       return { ...created };
+    },
+
+    async updateLog(id, input) {
+      await need(input.date, namesFor(input.date, input.exercise));
+      const payload = await request(
+        `/api/logs/${encodeURIComponent(id)}`,
+        { method: "PUT", body: JSON.stringify(input) },
+        "保存に失敗しました",
+      );
+      const updated = parseLog(payload);
+      remember(updated);
+      return { ...updated };
+    },
+
+    async deleteLog(id) {
+      await request(`/api/logs/${encodeURIComponent(id)}`, { method: "DELETE" }, "削除に失敗しました");
+      forget(id);
+    },
+
+    async finishDay(date) {
+      const payload = await request(
+        `/api/day/${encodeURIComponent(date)}/finish`,
+        { method: "POST" },
+        "Notion への反映に失敗しました",
+      );
+      const status = readFlushStatus(payload);
+      rememberStatus(date, status);
+      return status;
+    },
+
+    async refreshDayStatus(date) {
+      const payload = await request(
+        `/api/drafts?date=${encodeURIComponent(date)}`,
+        { method: "GET" },
+        "記録の取得に失敗しました",
+      );
+      const status = readFlushStatus(payload);
+      rememberStatus(date, status);
+      return status;
+    },
+
+    dayStatus(date) {
+      return statuses.get(date) ?? (closedDates.has(date) ? "synced" : "open");
+    },
+
+    isDayClosed(date) {
+      const status = statuses.get(date);
+      return status === "synced" || status === "flushing" || closedDates.has(date);
     },
 
     async touchExercise(name, atISO, onDate?: string) {

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { Modal } from "../components/Modal";
 import { ChevronDownIcon, Icon } from "../components/icons";
 import { useClient } from "../clientContext";
+import type { DayFlushStatus } from "../data/client";
 import { formatJapaneseDate, formatLogLine, formatMonthDay, type ExerciseLog } from "../domain";
 import { useLoad } from "../hooks/useLoad";
 import type { Route } from "../route";
@@ -13,6 +14,40 @@ interface PlanRow {
   name: string;
   previous: ExerciseLog[];
   today: ExerciseLog[];
+}
+
+/** flushing から synced に変わったとき、表示中の行を取り直す。反映中の「未」を残さない。 */
+export function shouldReloadLogs(status: DayFlushStatus): boolean {
+  return status === "synced";
+}
+
+/** 終了ボタンの代わりに出す文言。送信済みの日は再開できない。 */
+export function todayFinishView(menuFinished: boolean, status: DayFlushStatus): {
+  showResume: boolean;
+  showAdd: boolean;
+  showEnd: boolean;
+  showRetry: boolean;
+  message: string | null;
+} {
+  if (status === "synced") {
+    return { showResume: false, showAdd: false, showEnd: false, showRetry: false, message: "送信済み。修正は Notion で" };
+  }
+  if (status === "flushing") {
+    return { showResume: false, showAdd: false, showEnd: false, showRetry: false, message: "反映中" };
+  }
+  if (status === "failed") {
+    return {
+      showResume: false,
+      showAdd: !menuFinished,
+      showEnd: !menuFinished,
+      showRetry: menuFinished,
+      message: "失敗。もう一度終了を",
+    };
+  }
+  if (menuFinished) {
+    return { showResume: true, showAdd: false, showEnd: false, showRetry: false, message: null };
+  }
+  return { showResume: false, showAdd: true, showEnd: true, showRetry: false, message: null };
 }
 
 /** 記録がある種目を外すときの確認文。Notion の行は残ることを明示する。 */
@@ -29,6 +64,9 @@ export function TodayExerciseRow({
   dateLabel = "今日",
   onOpen,
   onRemove,
+  onEditDraft,
+  onDeleteDraft,
+  draftsEditable = true,
 }: {
   index: number;
   name: string;
@@ -40,7 +78,15 @@ export function TodayExerciseRow({
   dateLabel?: string;
   onOpen: () => void;
   onRemove: () => void;
+  /** 未反映の下書きだけ。カードの外に置く。 */
+  onEditDraft?: (log: ExerciseLog) => void;
+  onDeleteDraft?: (log: ExerciseLog) => void;
+  /** 反映中と送信済みは、下書きの修正と削除を出さない。 */
+  draftsEditable?: boolean;
 }) {
+  const drafts = today.filter((log) => log.synced === false);
+  const unsynced = drafts.length > 0;
+  const badgeText = unsynced || today.length === 0 ? "未" : `${today.length}件`;
   return (
     <li className="plan-item">
       <button type="button" className="exercise-card" onClick={onOpen}>
@@ -71,10 +117,24 @@ export function TodayExerciseRow({
             </span>
           )}
         </span>
-        <span className={today.length > 0 ? "badge is-done" : "badge"}>
-          {today.length > 0 ? `${today.length}件` : "未"}
-        </span>
+        <span className={today.length > 0 && !unsynced ? "badge is-done" : "badge"}>{badgeText}</span>
       </button>
+      {draftsEditable &&
+        drafts.map((log) => (
+        <div key={log.id} className="draft-actions">
+          <button type="button" className="draft-action" onClick={() => onEditDraft?.(log)}>
+            修正
+          </button>
+          <button
+            type="button"
+            className="draft-action is-danger"
+            aria-label={`${name}の下書きを削除`}
+            onClick={() => onDeleteDraft?.(log)}
+          >
+            削除
+          </button>
+        </div>
+      ))}
       {removable && (
         <button type="button" className="plan-remove" aria-label={`${name}を${dateLabel}のメニューから外す`} onClick={onRemove}>
           外す
@@ -143,7 +203,15 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
   const client = useClient();
   const auth = useAuth();
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [ending, setEnding] = useState(false);
+  const [endError, setEndError] = useState<string | null>(null);
+  const [notionStatus, setNotionStatus] = useState<DayFlushStatus>("open");
   const [editing, setEditing] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<ExerciseLog | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [logsRevision, setLogsRevision] = useState(0);
+  const endingRef = useRef(false);
+  const deletingRef = useRef(false);
   const [pendingRemove, setPendingRemove] = useState<string | null>(null);
   const [dateOpen, setDateOpen] = useState(false);
   const [dateChoices, setDateChoices] = useState<SessionDateChoice[]>([]);
@@ -172,9 +240,38 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       }),
     );
     return rows;
-  }, [planKey, session.date, client]);
+  }, [planKey, session.date, client, logsRevision]);
+
+  useEffect(() => {
+    setNotionStatus(client.dayStatus(session.date));
+    setEndError(null);
+  }, [session.date, client, loaded.data, logsRevision]);
+
+  useEffect(() => {
+    if (notionStatus !== "flushing") return;
+    let stop = false;
+    const timer = setInterval(() => {
+      void client
+        .refreshDayStatus(session.date)
+        .then((status) => {
+          if (stop) return;
+          setNotionStatus(status);
+          if (status === "synced") session.finish();
+          if (shouldReloadLogs(status)) setLogsRevision((value) => value + 1);
+        })
+        .catch(() => {
+          if (!stop) setNotionStatus("failed");
+        });
+    }, 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, [notionStatus, session, client]);
 
   const recordedCount = loaded.data?.filter((row) => row.today.length > 0).length ?? 0;
+  const finishView = todayFinishView(session.finished, notionStatus);
+  const draftsEditable = notionStatus === "open" || notionStatus === "failed";
   const canEditMenu = !session.finished && session.exercises.length > 0;
   const pendingTodayCount = loaded.data?.find((row) => row.name === pendingRemove)?.today.length ?? 0;
 
@@ -185,6 +282,42 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
       return;
     }
     session.removeExercise(name);
+  }
+
+  async function confirmFinish() {
+    if (endingRef.current) return;
+    endingRef.current = true;
+    setEnding(true);
+    setEndError(null);
+    try {
+      const status = await client.finishDay(session.date);
+      setNotionStatus(status);
+      setEditing(false);
+      if (status === "synced" || status === "flushing") session.finish();
+      setConfirmEnd(false);
+      setLogsRevision((value) => value + 1);
+      if (status === "failed") setEndError("失敗。もう一度終了を");
+    } catch (reason) {
+      setEndError(reason instanceof Error ? reason.message : "Notion への反映に失敗しました");
+    } finally {
+      endingRef.current = false;
+      setEnding(false);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete || deletingRef.current) return;
+    deletingRef.current = true;
+    setDeleteError(null);
+    try {
+      await client.deleteLog(pendingDelete.id);
+      setPendingDelete(null);
+      setLogsRevision((value) => value + 1);
+    } catch (reason) {
+      setDeleteError(reason instanceof Error ? reason.message : "削除に失敗しました");
+    } finally {
+      deletingRef.current = false;
+    }
   }
 
   return (
@@ -226,6 +359,7 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
           <p>
             記録した種目 {recordedCount} / {session.exercises.length}
           </p>
+          {finishView.message && <p>{finishView.message}</p>}
         </div>
       )}
 
@@ -289,6 +423,20 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
                   removable={editing && canEditMenu}
                   dateLabel={dateLabel}
                   onOpen={() => navigate({ screen: "record", exercise: name })}
+                  draftsEditable={draftsEditable}
+                  onEditDraft={
+                    draftsEditable
+                      ? (log) => navigate({ screen: "record", exercise: name, draftId: log.id })
+                      : undefined
+                  }
+                  onDeleteDraft={
+                    draftsEditable
+                      ? (log) => {
+                          setDeleteError(null);
+                          setPendingDelete(log);
+                        }
+                      : undefined
+                  }
                   onRemove={() => askRemove(name, today.length)}
                 />
               );
@@ -297,22 +445,40 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         </>
       )}
 
-      {session.finished ? (
+      {finishView.message && !session.finished && (
+        <p className="status-line" role="status">
+          {finishView.message}
+        </p>
+      )}
+
+      {finishView.showResume ? (
         <div className="action-row single">
           <button type="button" className="btn primary" onClick={session.resume}>
             再開する
           </button>
         </div>
-      ) : (
+      ) : null}
+
+      {finishView.showAdd ? (
         <div className="action-row">
           <button type="button" className="btn primary" onClick={() => navigate({ screen: "picker" })}>
             種目を追加
           </button>
-          <button type="button" className="btn secondary" onClick={() => setConfirmEnd(true)}>
-            {dateLabel}を終了
+          {finishView.showEnd && (
+            <button type="button" className="btn secondary" onClick={() => setConfirmEnd(true)}>
+              {dateLabel}を終了
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      {finishView.showRetry ? (
+        <div className="action-row single">
+          <button type="button" className="btn secondary" onClick={() => void confirmFinish()}>
+            もう一度終了する
           </button>
         </div>
-      )}
+      ) : null}
 
       {pendingDate && (
         <Modal
@@ -342,14 +508,36 @@ export function TodayScreen({ navigate }: { navigate: (route: Route) => void }) 
         <Modal
           titleId="end-title"
           title={`${dateLabel}のトレーニングを終了しますか？`}
-          body={`記録済み ${recordedCount} / ${session.exercises.length} 種目です。終了後も「再開する」で続けられます。`}
+          body={
+            endError ??
+            "終了すると記録を Notion に反映します。反映した記録はアプリから修正できません。"
+          }
           cancelLabel="キャンセル"
-          confirmLabel="終了する"
-          onCancel={() => setConfirmEnd(false)}
-          onConfirm={() => {
-            setEditing(false);
-            session.finish();
+          confirmLabel={ending ? "反映しています…" : "終了する"}
+          onCancel={() => {
+            if (ending) return;
+            setEndError(null);
             setConfirmEnd(false);
+          }}
+          onConfirm={() => {
+            void confirmFinish();
+          }}
+        />
+      )}
+
+      {pendingDelete && (
+        <Modal
+          titleId="delete-draft-title"
+          title="この下書きを削除しますか？"
+          body={deleteError ?? "未反映の記録だけを消します。Notion にはまだ書いていません。"}
+          cancelLabel="キャンセル"
+          confirmLabel="削除する"
+          onCancel={() => {
+            setDeleteError(null);
+            setPendingDelete(null);
+          }}
+          onConfirm={() => {
+            void confirmDelete();
           }}
         />
       )}

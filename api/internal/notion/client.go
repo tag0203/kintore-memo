@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tag0203/kintore-memo/api/internal/ddb"
 	"github.com/tag0203/kintore-memo/api/internal/model"
 )
 
@@ -20,6 +21,8 @@ type Backend interface {
 	GetPreviousLog(ctx context.Context, exercise, before string) ([]model.ExerciseLog, error)
 	GetLogOnDate(ctx context.Context, exercise, date string) ([]model.ExerciseLog, error)
 	CreateLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error)
+	// FindOrCreateLog returns the page whose 下書きID is draftID, creating it when absent.
+	FindOrCreateLog(ctx context.Context, draftID string, input model.NewExerciseLog) (model.ExerciseLog, error)
 }
 
 type schema struct {
@@ -313,6 +316,39 @@ func (c *Client) GetLogOnDate(ctx context.Context, exercise, date string) ([]mod
 	return chronological(rows), nil
 }
 
+// FindOrCreateLog reuses a page that already stores this draft id.
+// A lost create response, a timeout, or a failed DynamoDB update can retry this
+// without adding a second Notion row.
+func (c *Client) FindOrCreateLog(ctx context.Context, draftID string, input model.NewExerciseLog) (model.ExerciseLog, error) {
+	if _, err := ddb.AssertDraftID(draftID); err != nil {
+		return model.ExerciseLog{}, errors.New("draft id must be a UUID")
+	}
+	source, err := c.resolve(ctx)
+	if err != nil {
+		return model.ExerciseLog{}, err
+	}
+	_, pages, _, _, err := c.query(ctx, buildDraftIDQuery(draftID))
+	if err != nil {
+		return model.ExerciseLog{}, err
+	}
+	if len(pages) > 0 {
+		found := logFromCreatedPage(pages[0], source.titleProperty, input)
+		if found.ID != "" {
+			return found, nil
+		}
+	}
+	input.Exercise = trim(input.Exercise)
+	body := withDraftID(buildCreatePageBody(source.dataSourceID, source.titleProperty, input), draftID)
+	page, err := c.notion(ctx, "/pages", http.MethodPost, body)
+	if err != nil {
+		return model.ExerciseLog{}, err
+	}
+	c.mu.Lock()
+	c.schema = nil
+	c.mu.Unlock()
+	return logFromCreatedPage(page, source.titleProperty, input), nil
+}
+
 // CreateLog appends one page and drops the schema cache so a new select option is visible.
 func (c *Client) CreateLog(ctx context.Context, input model.NewExerciseLog) (model.ExerciseLog, error) {
 	source, err := c.resolve(ctx)
@@ -327,8 +363,12 @@ func (c *Client) CreateLog(ctx context.Context, input model.NewExerciseLog) (mod
 	c.mu.Lock()
 	c.schema = nil
 	c.mu.Unlock()
-	if log := PageToLog(page, source.titleProperty); log != nil {
-		return *log, nil
+	return logFromCreatedPage(page, source.titleProperty, input), nil
+}
+
+func logFromCreatedPage(page map[string]any, titleProperty string, input model.NewExerciseLog) model.ExerciseLog {
+	if log := PageToLog(page, titleProperty); log != nil && log.ID != "" {
+		return *log
 	}
 	title := trim(input.Title)
 	if title == "" {
@@ -349,7 +389,7 @@ func (c *Client) CreateLog(ctx context.Context, input model.NewExerciseLog) (mod
 		Date:       input.Date,
 		Title:      title,
 		CreatedAt:  created,
-	}, nil
+	}
 }
 
 func itoa(value int) string {

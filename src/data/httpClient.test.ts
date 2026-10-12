@@ -442,4 +442,120 @@ describe("http workout client", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("updates, deletes, and finishes drafts without another read", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const method = init?.method ?? "GET";
+        calls.push(`${method} ${url.pathname}`);
+        if (method === "GET" && url.pathname.endsWith("/api/bootstrap")) {
+          return Response.json({
+            date,
+            daySynced: false,
+            exercises: [{ name: "スクワット", lastPickedAt: null }],
+            recent: [],
+            logs: {
+              スクワット: {
+                previous: [],
+                today: [log({ id: "draft-1", exercise: "スクワット", date, weightKg: 80, synced: false })],
+              },
+            },
+          });
+        }
+        if (method === "PUT" && url.pathname.endsWith("/api/logs/draft-1")) {
+          const input = JSON.parse(String(init?.body)) as { weightKg: number };
+          return Response.json(log({ id: "draft-1", exercise: "スクワット", date, weightKg: input.weightKg, synced: false }));
+        }
+        if (method === "DELETE" && url.pathname.endsWith("/api/logs/draft-1")) {
+          return new Response(null, { status: 204 });
+        }
+        if (method === "POST" && url.pathname.endsWith(`/api/day/${date}/finish`)) {
+          return Response.json({ date, flushed: 0, synced: true });
+        }
+        return Response.json({ error: "予期しない経路" }, { status: 500 });
+      }),
+    );
+    try {
+      const workout = client();
+      expect(await workout.getLogOnDate("スクワット", date)).toMatchObject([{ id: "draft-1", synced: false }]);
+      expect(workout.isDayClosed(date)).toBe(false);
+      const updated = await workout.updateLog("draft-1", {
+        exercise: "スクワット",
+        weightKg: 85,
+        reps: 8,
+        sets: 3,
+        difficulty: 3,
+        date,
+      });
+      expect(updated).toMatchObject({ id: "draft-1", weightKg: 85, synced: false });
+      expect(await workout.getLogOnDate("スクワット", date)).toMatchObject([{ weightKg: 85 }]);
+      await workout.deleteLog("draft-1");
+      expect(await workout.getLogOnDate("スクワット", date)).toEqual([]);
+      expect(await workout.finishDay(date)).toBe("synced");
+      expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("synced");
+      expect(calls).toContain("PUT /dev/api/logs/draft-1");
+      expect(calls).toContain("DELETE /dev/api/logs/draft-1");
+      expect(calls).toContain(`POST /dev/api/day/${date}/finish`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("marks the session closed when bootstrap says the day was flushed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          date,
+          daySynced: true,
+          exercises: [],
+          recent: [],
+          logs: {},
+        }),
+      ),
+    );
+    try {
+      const workout = client();
+      await workout.listExercises(date);
+      expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("synced");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the day in progress until a later read says it synced", async () => {
+    let finishReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.pathname.endsWith("/finish")) {
+          return Response.json({ date, status: "flushing", synced: false, flushed: 0 });
+        }
+        if (method === "GET" && url.pathname.endsWith("/api/drafts")) {
+          finishReads += 1;
+          const status = finishReads < 2 ? "flushing" : "synced";
+          return Response.json({ date, status, synced: status === "synced", drafts: [] });
+        }
+        return Response.json({ error: "予期しない経路" }, { status: 500 });
+      }),
+    );
+    try {
+      const workout = client();
+      expect(await workout.finishDay(date)).toBe("flushing");
+      expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("flushing");
+      expect(await workout.refreshDayStatus(date)).toBe("flushing");
+      expect(await workout.refreshDayStatus(date)).toBe("synced");
+      expect(workout.dayStatus(date)).toBe("synced");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

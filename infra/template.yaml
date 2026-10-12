@@ -115,8 +115,8 @@ Resources:
         RefreshToken: days
 
   # ---------------------------------------------------------------------------
-  # DynamoDB single table (issue #11). Entities: DayPlan, NotionCache.
-  # pk/sk + ttl. No GSI. Key shapes: docs/dynamodb.md.
+  # DynamoDB single table (issue #11). Entities: DayPlan, NotionCache,
+  # DraftDay, FlushIndex. pk/sk + ttl. No GSI. Key shapes: docs/dynamodb.md.
   # Go items: api/internal/ddb. Key shapes: docs/dynamodb.md.
   # ---------------------------------------------------------------------------
   AppTable:
@@ -196,11 +196,13 @@ Resources:
         AllowHeaders:
           - Authorization
           - Content-Type
-        # Go router (api/internal/httpapi) serves GET, POST, and PUT only.
+        # Go router (api/internal/httpapi) serves GET, POST, PUT, and DELETE.
+        # PATCH stays off. OPTIONS is CORS preflight, not a Go route.
         AllowMethods:
           - GET
           - POST
           - PUT
+          - DELETE
           - OPTIONS
         MaxAge: 600
         AllowCredentials: false
@@ -212,6 +214,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${ProjectName}-${Environment}-api
+      RetentionInDays: !Ref LogRetentionDays
+
+  FlushFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ProjectName}-${Environment}-flush
       RetentionInDays: !Ref LogRetentionDays
 
   # Explicit role so SAM does not attach AWSLambdaBasicExecutionRole (logs:* on *).
@@ -242,8 +250,10 @@ Resources:
                 Resource:
                   - !GetAtt ApiFunctionLogGroup.Arn
                   - !Sub "${ApiFunctionLogGroup.Arn}:*"
-              # DayPlan (#6) and NotionCache (#10) only. Known pk+sk, so no Query/Scan
-              # and no index ARN (the table has no GSI). See docs/dynamodb.md.
+                  - !GetAtt FlushFunctionLogGroup.Arn
+                  - !Sub "${FlushFunctionLogGroup.Arn}:*"
+              # DayPlan, NotionCache, DraftDay, and FlushIndex. Known pk+sk, so no
+              # Query/Scan and no index ARN (the table has no GSI). See docs/dynamodb.md.
               - Sid: DynamoDBTableAccess
                 Effect: Allow
                 Action:
@@ -268,6 +278,13 @@ Resources:
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              # Start the flush function and return. Notion runs there, not in this 20s handler.
+              - Sid: InvokeFlushFunction
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-flush
 
   ApiFunction:
     Type: AWS::Serverless::Function
@@ -306,6 +323,7 @@ Resources:
           # HttpApi events, the CSP policy, and the distribution would cycle.
           ALLOWED_ORIGIN: !Ref SpaAllowedOrigin
           ENVIRONMENT: !Ref Environment
+          FLUSH_FUNCTION_NAME: !Sub ${ProjectName}-${Environment}-flush
       Events:
         HealthGet:
           Type: HttpApi
@@ -318,7 +336,7 @@ Resources:
         # Explicit methods, not ANY. HTTP API CorsConfiguration answers OPTIONS
         # only when no route matches it. ANY on /api/{proxy+} also matches
         # OPTIONS, so the JWT authorizer returns 401 and browsers reject the
-        # preflight. Go handlers use GET, POST, and PUT (no DELETE or PATCH).
+        # preflight. Go handlers use GET, POST, PUT, and DELETE (no PATCH).
         ApiGet:
           Type: HttpApi
           Properties:
@@ -343,6 +361,49 @@ Resources:
             Method: PUT
             Auth:
               Authorizer: CognitoJwtAuthorizer
+        ApiDelete:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /api/{proxy+}
+            Method: DELETE
+            Auth:
+              Authorizer: CognitoJwtAuthorizer
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+
+  # Same binary and role as ApiFunction. HANDLER_MODE selects the nightly path.
+  # Schedule is an EventBridge rule in UTC. 15:10 UTC is 00:10 Asia/Tokyo all year.
+  # Reuses ApiFunctionRole so the deploy role does not create a second role.
+  FlushFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: FlushFunctionLogGroup
+    Metadata:
+      BuildMethod: go1.x
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${Environment}-flush
+      CodeUri: ../api/
+      Handler: bootstrap
+      Runtime: provided.al2023
+      Role: !GetAtt ApiFunctionRole.Arn
+      Timeout: 300
+      Description: Flush workout drafts once the session date is two Tokyo days old, and finish jobs accepted by the API.
+      Environment:
+        Variables:
+          HANDLER_MODE: flush
+          TABLE_NAME: !Ref AppTable
+          NOTION_TOKEN_PARAM: !Sub /${ProjectName}/${Environment}/notion/token
+          NOTION_DATABASE_ID_PARAM: !Sub /${ProjectName}/${Environment}/notion/database-id
+          ENVIRONMENT: !Ref Environment
+      Events:
+        Nightly:
+          Type: Schedule
+          Properties:
+            Schedule: cron(10 15 * * ? *)
+            Name: !Sub ${ProjectName}-${Environment}-flush-drafts
+            Description: Flush drafts at 00:10 Asia/Tokyo once the date is two days old.
+            Enabled: true
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment

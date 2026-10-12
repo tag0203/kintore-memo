@@ -1,5 +1,8 @@
 import type { ExerciseLog, ExerciseSummary, NewExerciseLog } from "../domain";
 
+/** その日の Notion 反映。終了は受付だけ返し、画面はこれを見て待つ。 */
+export type DayFlushStatus = "open" | "flushing" | "synced" | "failed";
+
 /**
  * トレーニング記録の読み書き口。
  * 本番は API Gateway（Cognito の JWT のみ）。API ベース URL が無いときはインメモリのモック。
@@ -13,8 +16,20 @@ export interface WorkoutLogClient {
   getPreviousLog(exercise: string, beforeDate: string): Promise<ExerciseLog[]>;
   /** その日に保存した行をすべて。無ければ空。 */
   getLogOnDate(exercise: string, date: string): Promise<ExerciseLog[]>;
-  /** 追記のみ。既存行は更新しない。 */
+  /** 下書きを1行追加する。Notion にはまだ書かない。 */
   createLog(input: NewExerciseLog): Promise<ExerciseLog>;
+  /** 未反映の下書きだけを書き換える。 */
+  updateLog(id: string, input: NewExerciseLog): Promise<ExerciseLog>;
+  /** 未反映の下書きだけを消す。 */
+  deleteLog(id: string): Promise<void>;
+  /** その日の下書きの反映を受け付ける。Notion への書き込みは別の処理が行う。 */
+  finishDay(date: string): Promise<DayFlushStatus>;
+  /** 反映の進み具合を取り直す。終了のあと、反映中ならこれを繰り返す。 */
+  refreshDayStatus(date: string): Promise<DayFlushStatus>;
+  /** 直近に知っている反映状態。まだ見ていなければ open。 */
+  dayStatus(date: string): DayFlushStatus;
+  /** 反映中または反映済みなら true。下書きの修正と削除はできない。 */
+  isDayClosed(date: string): boolean;
   /** 保存した種目の「最近」順を更新する。未知の名前ならカタログに足す。onDate はそのセッション日。 */
   touchExercise(name: string, atISO: string, onDate?: string): Promise<ExerciseSummary>;
 }

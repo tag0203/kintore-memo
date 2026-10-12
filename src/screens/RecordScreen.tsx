@@ -59,10 +59,12 @@ export async function persistRecordedExercise(input: {
 
 export function RecordScreen({
   exercise,
+  draftId,
   navigate,
   back,
 }: {
   exercise: string;
+  draftId?: string;
   navigate: (route: Route) => void;
   back: () => void;
 }) {
@@ -85,18 +87,37 @@ export function RecordScreen({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const closed = client.isDayClosed(session.date);
 
   useEffect(() => {
     if (loaded.status !== "ready" || !loaded.data || draft) return;
     const [previous, todayLogs] = loaded.data;
+    if (draftId) {
+      const target = todayLogs.find((log) => log.id === draftId && log.synced === false);
+      if (!target) {
+        setError("見つかりません");
+        setDraft(emptyDraft);
+        setBaseline(JSON.stringify(emptyDraft));
+        return;
+      }
+      const next = draftFromLog(target);
+      setDraft(next);
+      setBaseline(JSON.stringify(next));
+      return;
+    }
     const seed = todayLogs.at(-1) ?? previous.at(-1);
     const next = seed ? draftFromLog(seed) : emptyDraft;
     setDraft(next);
     setBaseline(JSON.stringify(next));
-  }, [loaded.status, loaded.data, draft]);
+  }, [loaded.status, loaded.data, draft, draftId]);
 
   const previous = loaded.data?.[0] ?? [];
   const todayLogs = loaded.data?.[1] ?? [];
+  const editingDraft = draftId
+    ? todayLogs.find((log) => log.id === draftId && log.synced === false)
+    : undefined;
+  const locked = closed || (draftId != null && !editingDraft);
   const dirty = draft != null && JSON.stringify(draft) !== baseline;
 
   function update(partial: Partial<Draft>) {
@@ -114,7 +135,7 @@ export function RecordScreen({
 
   async function onSave(event: FormEvent) {
     event.preventDefault();
-    if (!draft || saving) return;
+    if (!draft || saving || locked) return;
     const weightKg = parseWeight(draft.weight);
     const reps = parseCount(draft.reps);
     const sets = parseCount(draft.sets);
@@ -123,21 +144,21 @@ export function RecordScreen({
       setError("重量・回数・セット・きつさを入力してください");
       return;
     }
+    const input = {
+      exercise,
+      weightKg,
+      reps,
+      sets,
+      difficulty,
+      date: session.date,
+      title: PAGE_TITLE,
+    };
     setSaving(true);
     try {
       await persistRecordedExercise({
         exercise,
         date: session.date,
-        createLog: () =>
-          client.createLog({
-            exercise,
-            weightKg,
-            reps,
-            sets,
-            difficulty,
-            date: session.date,
-            title: PAGE_TITLE,
-          }),
+        createLog: () => (draftId ? client.updateLog(draftId, input) : client.createLog(input)),
         addExercise: (name) => {
           session.addExercise(name);
         },
@@ -147,6 +168,19 @@ export function RecordScreen({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "保存できませんでした");
       setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!draftId || saving) return;
+    setSaving(true);
+    try {
+      await client.deleteLog(draftId);
+      navigate({ screen: "today" });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "削除に失敗しました");
+      setSaving(false);
+      setConfirmDelete(false);
     }
   }
 
@@ -223,8 +257,19 @@ export function RecordScreen({
                     </li>
                   ))}
                 </ul>
-                <p className="today-note">{dateLabel}の記録は残したまま、保存でもう1行追加します。</p>
+                {draftId ? (
+                  <p className="today-note">この下書きを上書きします。反映済みの記録はここから直せません。</p>
+                ) : (
+                  <p className="today-note">{dateLabel}の記録は残したまま、保存でもう1行追加します。</p>
+                )}
               </>
+            )}
+            {closed && (
+              <p className="form-error">
+                {client.dayStatus(session.date) === "flushing"
+                  ? "反映中"
+                  : "反映済みの記録は Notion で修正してください"}
+              </p>
             )}
             {draft && (
               <>
@@ -236,6 +281,7 @@ export function RecordScreen({
                     inputMode="decimal"
                     autoComplete="off"
                     value={draft.weight}
+                    disabled={locked}
                     onChange={(event) => update({ weight: event.target.value })}
                   />
                   <span className="unit">kg</span>
@@ -258,6 +304,7 @@ export function RecordScreen({
                     inputMode="numeric"
                     autoComplete="off"
                     value={draft.reps}
+                    disabled={locked}
                     onChange={(event) => update({ reps: event.target.value })}
                   />
                   <span className="unit">回</span>
@@ -280,6 +327,7 @@ export function RecordScreen({
                     inputMode="numeric"
                     autoComplete="off"
                     value={draft.sets}
+                    disabled={locked}
                     onChange={(event) => update({ sets: event.target.value })}
                   />
                   <span className="unit">セット</span>
@@ -296,14 +344,24 @@ export function RecordScreen({
                 </div>
                 <div className="difficulty-row">
                   <span id="difficulty-label">きつさ</span>
-                  <DifficultyFaces value={draft.difficulty} onChange={(difficulty) => update({ difficulty })} />
+                  <DifficultyFaces
+                    value={draft.difficulty}
+                    onChange={(difficulty) => {
+                      if (!locked) update({ difficulty });
+                    }}
+                  />
                 </div>
                 <p className="difficulty-caption">
                   {draft.difficulty ? DIFFICULTY_LABELS[draft.difficulty] : "きつさを選択"}
                 </p>
               </>
             )}
-            <button type="submit" className="btn primary save-btn" disabled={saving || !draft}>
+            {editingDraft && (
+              <button type="button" className="btn secondary" disabled={saving} onClick={() => setConfirmDelete(true)}>
+                この下書きを削除
+              </button>
+            )}
+            <button type="submit" className="btn primary save-btn" disabled={saving || !draft || locked}>
               <Icon>
                 <SaveIcon />
               </Icon>
@@ -319,6 +377,20 @@ export function RecordScreen({
             </Icon>
           </button>
         </>
+      )}
+
+      {confirmDelete && (
+        <Modal
+          titleId="delete-draft-title"
+          title="この下書きを削除しますか？"
+          body="未反映の記録だけを消します。Notion にはまだ書いていません。"
+          cancelLabel="キャンセル"
+          confirmLabel="削除する"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            void onDelete();
+          }}
+        />
       )}
 
       {confirmDiscard && (

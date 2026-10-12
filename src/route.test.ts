@@ -9,5 +9,10 @@ describe("hash routes", () => {
       screen: "record",
       exercise: "レッグプレス",
     });
+    expect(parseHash(routeToHash({ screen: "record", exercise: "スクワット", draftId: "draft-1" }))).toEqual({
+      screen: "record",
+      exercise: "スクワット",
+      draftId: "draft-1",
+    });
   });
 });

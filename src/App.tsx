@@ -62,7 +62,13 @@ function Shell() {
       {route.screen === "today" && <TodayScreen navigate={navigate} />}
       {route.screen === "picker" && <PickerScreen navigate={navigate} back={back} />}
       {route.screen === "record" && (
-        <RecordScreen key={route.exercise} exercise={route.exercise} navigate={navigate} back={back} />
+        <RecordScreen
+          key={`${route.exercise}:${route.draftId ?? ""}`}
+          exercise={route.exercise}
+          draftId={route.draftId}
+          navigate={navigate}
+          back={back}
+        />
       )}
     </div>
   );

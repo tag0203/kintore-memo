@@ -69,6 +69,66 @@ describe("mock workout client", () => {
     const todayLogs = await client.getLogOnDate("スクワット", "2026-09-26");
     expect(todayLogs.map((log) => log.id)).toEqual([created.id, heavier.id]);
     expect(todayLogs.map((log) => log.weightKg)).toEqual([82.5, 90]);
+    expect(todayLogs.every((log) => log.synced === false)).toBe(true);
+    expect(client.isDayClosed("2026-09-26")).toBe(false);
+  });
+
+  it("edits and deletes unsynced drafts, then refuses changes after finish", async () => {
+    const client = createMockClient(createSeed(today));
+    const created = await client.createLog({
+      exercise: "スクワット",
+      weightKg: 82.5,
+      reps: 8,
+      sets: 3,
+      difficulty: 4,
+      date: "2026-09-26",
+    });
+    const updated = await client.updateLog(created.id, {
+      exercise: "スクワット",
+      weightKg: 85,
+      reps: 8,
+      sets: 3,
+      difficulty: 4,
+      date: "2026-09-26",
+    });
+    expect(updated).toMatchObject({ id: created.id, weightKg: 85, synced: false });
+    await client.deleteLog(created.id);
+    await expect(client.getLogOnDate("スクワット", "2026-09-26")).resolves.toEqual([]);
+
+    const again = await client.createLog({
+      exercise: "スクワット",
+      weightKg: 80,
+      reps: 5,
+      sets: 3,
+      difficulty: 3,
+      date: "2026-09-26",
+    });
+    await client.finishDay("2026-09-26");
+    expect(client.isDayClosed("2026-09-26")).toBe(true);
+    await expect(client.getLogOnDate("スクワット", "2026-09-26")).resolves.toMatchObject([
+      { id: again.id, synced: true },
+    ]);
+    await expect(
+      client.updateLog(again.id, {
+        exercise: "スクワット",
+        weightKg: 100,
+        reps: 5,
+        sets: 3,
+        difficulty: 3,
+        date: "2026-09-26",
+      }),
+    ).rejects.toThrow("反映済みの記録は Notion で修正してください");
+    await expect(client.deleteLog(again.id)).rejects.toThrow("反映済みの記録は Notion で修正してください");
+    await expect(
+      client.createLog({
+        exercise: "スクワット",
+        weightKg: 70,
+        reps: 5,
+        sets: 3,
+        difficulty: 3,
+        date: "2026-09-26",
+      }),
+    ).rejects.toThrow("反映済みの記録は Notion で修正してください");
   });
 
   it("adds a new exercise name to the catalog", async () => {

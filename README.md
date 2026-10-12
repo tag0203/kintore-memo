@@ -12,7 +12,7 @@
 
 種目をタップすると記録画面へ進みます。同じ日に同じ種目を重量を変えて何度でも追加できます。先に保存した行は残り、前回の表示は今日の行で置き換わりません。
 
-「編集」を押すと、各種目カードの外に「外す」が出ます。カード自体のタップは記録画面のままです。今日の記録が無い種目はその場でメニューから外れます。記録がある種目は確認を挟み、Notion の行は消しません。「今日を終了」のあとは「再開する」まで外せません。外したあとの種目一覧は DayPlan に保存されます。
+「編集」を押すと、各種目カードの外に「外す」が出ます。カード自体のタップは記録画面のままです。今日の記録が無い種目はその場でメニューから外れます。記録がある種目は確認を挟み、Notion の行は消しません。「今日を終了」のあと、Notion へ送り終わる前は「再開する」まで外せません。送信済みの日は再開せず、修正は Notion で行います。外したあとの種目一覧は DayPlan に保存されます。
 
 ## ローカルで起動する
 
@@ -48,7 +48,7 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
   WorkoutLogClient
     ├─ HTTP（src/data/httpClient.ts）
     │    Cognito の IdToken + VITE_API_BASE_URL があるとき
-    │    起動時 GET /api/bootstrap、保存時 POST /api/logs、遷移はキャッシュ
+    │    起動時 GET /api/bootstrap、保存は下書き、終了で Notion へ反映、遷移はキャッシュ
     └─ インメモリのモック（src/data/browserClient.ts）
          Cognito か API ベース URL が無いとき
   今日のメニュー / 部位メモ / 終了
@@ -63,6 +63,8 @@ Cognito と `VITE_API_BASE_URL` が両方あるときは、ログイン後の記
          ├─ Notion API 2026-03-11
          └─ DynamoDB
               ├─ DayPlan（今日のメニュー。GET / PUT /api/day-plan）
+              ├─ DraftDay（未反映の記録。終了か、2 日後の夜間ジョブで Notion へ）
+              ├─ FlushIndex（未反映の日の一覧。夜間ジョブが 1 項目だけ読む）
               └─ 任意: NotionCache（300 秒。正データではない）
 
 参考: Cloudflare Worker（デプロイしない）
@@ -73,7 +75,7 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 
 ### Lambda の API
 
-`GET /api/health` だけ認証なしです。それ以外の `GET` / `POST` / `PUT` は API Gateway の JWT Authorizer が付いています。ブラウザの preflight（`OPTIONS`）はルートにせず、HTTP API の CORS 設定が答えます。
+`GET /api/health` だけ認証なしです。それ以外の `GET` / `POST` / `PUT` / `DELETE` は API Gateway の JWT Authorizer が付いています。ブラウザの preflight（`OPTIONS`）はルートにせず、HTTP API の CORS 設定が答えます。
 
 | メソッド | 経路 | 内容 |
 | --- | --- | --- |
@@ -83,7 +85,11 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 | GET | `/api/logs/previous?exercise=&before=YYYY-MM-DD` | その種目で、その日より前に記録がある最新の日の行をすべて |
 | GET | `/api/logs/today?exercise=&date=YYYY-MM-DD` | その日のその種目の行をすべて |
 | GET | `/api/bootstrap?date=YYYY-MM-DD&exercise=` | 種目・最近・指定種目の前回と当日を一括。`exercise` は繰り返せる。`exercises=a,b` も可 |
-| POST | `/api/logs` | 1 行追加。重量・回数・セット・きつさ・日付を検査してから Notion へ書く |
+| POST | `/api/logs` | 下書きを 1 行追加する。重量・回数・セット・きつさ・日付を検査する。Notion にはまだ書かない |
+| PUT | `/api/logs/{id}` | 未反映の下書きを書き換える。反映済みは 409 |
+| DELETE | `/api/logs/{id}` | 未反映の下書きを消す。反映済みは 409 |
+| GET | `/api/drafts?date=YYYY-MM-DD` | その日の下書き。`GET /api/logs/today` は種目ごとの読み取りのまま |
+| POST | `/api/day/{date}/finish` | その日の下書きを Notion に反映する。ページ ID がある行は書き直さない |
 | GET | `/api/day-plan?date=YYYY-MM-DD` | そのユーザーのその日のメニュー。項目が無ければ空。ユーザーは JWT の `sub` |
 | PUT | `/api/day-plan` | `{ date, memo, exercises, finished }` で DayPlan を置き換える。ログイン済みの画面が呼ぶ |
 
@@ -91,13 +97,13 @@ Vite は `VITE_` で始まる変数だけをブラウザへ埋め込みます。
 
 `date` は画面のセッション日付です。Lambda の UTC「今日」では上書きしません。
 
-レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。`POST /api/logs` のあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、Go の `api/internal/ddb` が組み立てます。
+レート制限を避けるため、bootstrap と各 GET は同じ「最近の記録」ウィンドウを 300 秒キャッシュします。ウィンドウで前回が確定できない種目だけ、追加で 1 件問い合わせます。画面遷移のためには使いません。その日を Notion に反映したあと、種目一覧と最近ウィンドウとその種目のキャッシュを捨て、次の読みで Notion に戻ります。下書きの保存だけでは Notion を呼びません。DynamoDB が使えないときはプロセス内メモリだけにします（`NOTION_CACHE=memory`）。キャッシュ項目は [docs/dynamodb.md](docs/dynamodb.md) の `NotionCache`（`pk=CACHE#notion`、セグメントを `#` で結んだ `sk`、TTL 300 秒）で、Go の `api/internal/ddb` が組み立てます。
 
-画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）はセッション開始の `GET /api/bootstrap` と、保存の `POST /api/logs` だけを呼びます。種目一覧・前回・当日の個別 GET は使いません。保存に成功した行を、その種目の当日の並びに足します。前回の行は置き換えず、再取得もしません。
+画面（[#12](https://github.com/tag0203/kintore-memo/issues/12)）はセッション開始の `GET /api/bootstrap` と、下書きの保存・修正・削除、終了の `POST /api/day/{date}/finish` を呼びます。種目一覧・前回・当日の個別 GET は使いません。保存に成功した行を、その種目の当日の並びに足します。前回の行は置き換えず、再取得もしません。`終了` は反映を受け付けてすぐ返します。Notion への書き込みは別の Lambda が行い、画面は「反映中」「送信済み。修正は Notion で」「失敗。もう一度終了を」を出します。反映済みの行はアプリから直しません（[#49](https://github.com/tag0203/kintore-memo/issues/49)）。終了を押し忘れた日は、東京時間でその日付の 2 日後 0:10 に自動で反映します。
 
 | 状態 | どこに置くか |
 | --- | --- |
-| 種目・重量・回数・セット数・きつさ・日付・タイトル | Notion の1行。同じ日・同じ種目でも保存のたびに追加（上書きしない）。列は増やさない |
+| 種目・重量・回数・セット数・きつさ・日付・タイトル | 保存中は DynamoDB の下書き。`終了`（または 2 日後の夜間ジョブ）で Notion の 1 行になる。反映後の修正は Notion。列は増やさない |
 | 前回 | その種目で、今日より前に記録がある最新の日の行をすべて。他の種目の日付では決めない。今日の行は含めない |
 | 当日 | その日のその種目の行をすべて。先の行は後からの保存で消さない |
 | 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の DayPlan 1 項目。Go API の `GET` / `PUT /api/day-plan`（[docs/dynamodb.md](docs/dynamodb.md)、[#6](https://github.com/tag0203/kintore-memo/issues/6)）。Cognito と API URL が無いローカルだけブラウザのメモリ |
@@ -131,8 +137,11 @@ npx wrangler secret put NOTION_DATABASE_ID
 | セット数 | number | セット数 |
 | きつさ | select | とても楽 / 楽 / ややきつい / きつい / とてもきつい |
 | 日付 | date | その記録の日 |
+| 下書きID | rich_text | 下書きの UUID。終了のやり直しが、すでに作った Notion の行を探すために使う。画面では編集しない。既存の行は空でよい |
 
 新しい種目名は、最初の保存でセレクトの選択肢として足されます。それまで今日のメニューには載りますが、Notion には行がありません。
+
+`下書きID` が無いデータベースは、本番の API がスキーマ確認で拒否します。反映の前に、Notion のデータベースへこの列を追加してください。参考実装の `worker/` はこの列を書きません。
 
 ## AWS への次の段階
 

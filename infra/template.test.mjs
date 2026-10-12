@@ -76,11 +76,9 @@ describe("HttpApi CORS", () => {
     const start = template.indexOf("CorsConfiguration:");
     const end = template.indexOf("Tags:", start);
     const cors = template.slice(start, end);
-    for (const method of ["GET", "POST", "PUT", "OPTIONS"]) {
+    for (const method of ["GET", "POST", "PUT", "DELETE", "OPTIONS"]) {
       expect(cors).toContain(`- ${method}`);
     }
-    // api/internal/httpapi has no DELETE or PATCH handlers.
-    expect(cors).not.toContain("- DELETE");
     expect(cors).not.toContain("- PATCH");
   });
 
@@ -93,6 +91,7 @@ describe("HttpApi CORS", () => {
 
     const proxy = events.filter((block) => block.includes("Path: /api/{proxy+}"));
     expect(proxy.map((block) => block.match(/Method:\s*(\S+)/)?.[1]).sort()).toEqual([
+      "DELETE",
       "GET",
       "POST",
       "PUT",
@@ -145,6 +144,34 @@ describe("ReservedConcurrency", () => {
     expect(template).toContain("ReservedConcurrentExecutions: !If");
     expect(deployWorkflow).toContain('"ReservedConcurrency=0"');
     expect(samconfig).toContain("ReservedConcurrency=0");
+  });
+});
+
+describe("FlushFunction", () => {
+  it("reuses the API role and runs at 00:10 Asia/Tokyo", () => {
+    const flush = template.slice(template.indexOf("  FlushFunction:"), template.indexOf("  SpaBucket:"));
+    expect(flush).toContain("Type: AWS::Serverless::Function");
+    expect(flush).toContain("FunctionName: !Sub ${ProjectName}-${Environment}-flush");
+    expect(flush).toContain("Role: !GetAtt ApiFunctionRole.Arn");
+    expect(flush).toContain("CodeUri: ../api/");
+    expect(flush).toContain("Timeout: 300");
+    expect(flush).toContain("HANDLER_MODE: flush");
+    expect(flush).toContain("Schedule: cron(10 15 * * ? *)");
+    expect(flush).toContain("Name: !Sub ${ProjectName}-${Environment}-flush-drafts");
+    expect(flush).not.toContain("ALLOWED_ORIGIN");
+    const apiStart = template.indexOf("  ApiFunction:");
+    const apiEnv = template.slice(
+      template.indexOf("Environment:\n        Variables:", apiStart),
+      template.indexOf("Events:", apiStart),
+    );
+    expect(apiEnv).not.toContain("HANDLER_MODE");
+    expect(apiEnv).toContain("FLUSH_FUNCTION_NAME: !Sub ${ProjectName}-${Environment}-flush");
+    expect(flush).not.toContain("FLUSH_FUNCTION_NAME");
+    expect(template.match(/HANDLER_MODE: flush/g)).toHaveLength(1);
+    const invoke = statement("InvokeFlushFunction");
+    expect(invoke).toContain("lambda:InvokeFunction");
+    expect(invoke).toContain("function:${ProjectName}-${Environment}-flush");
+    expect(invoke).not.toContain('Resource: "*"');
   });
 });
 
