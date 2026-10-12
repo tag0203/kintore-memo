@@ -40,6 +40,8 @@ type Deps struct {
 	Drafts      draft.Store
 	Parameters  secrets.Getter
 	Dynamo      tableAPI
+	// Enqueue starts the flush Lambda. Tests pass a fake. Nil refuses a finish that still has drafts.
+	Enqueue func(context.Context, draft.FlushJob) error
 }
 
 // Handler serves API Gateway HTTP API payload v2.
@@ -52,6 +54,7 @@ type Handler struct {
 	dayPlan     dayplan.Store
 	drafts      draft.Store
 	dynamo      tableAPI
+	enqueue     func(context.Context, draft.FlushJob) error
 
 	mu       sync.Mutex
 	services map[string]*notion.Service
@@ -71,6 +74,7 @@ func New(deps Deps) *Handler {
 		dayPlan:     deps.DayPlan,
 		drafts:      deps.Drafts,
 		dynamo:      deps.Dynamo,
+		enqueue:     deps.Enqueue,
 		services:    map[string]*notion.Service{},
 	}
 	if h.loadSecrets == nil {
@@ -174,6 +178,56 @@ func (h *Handler) HandleFlush(ctx context.Context, _ events.CloudWatchEvent) err
 		return errors.New("draft flush incomplete")
 	}
 	return nil
+}
+
+// HandleFlushJob writes one day accepted by POST /finish. The payload is the
+// lease from Accept. User ids are not logged.
+func (h *Handler) HandleFlushJob(ctx context.Context, job draft.FlushJob) error {
+	if _, err := ddb.AssertUserID(job.UserID); err != nil || job.Date == "" {
+		log.Printf("flush job rejected")
+		return nil
+	}
+	if _, err := ddb.AssertISODate(job.Date); err != nil {
+		log.Printf("flush job rejected")
+		return nil
+	}
+	svc, err := h.flushService(ctx)
+	if err != nil {
+		log.Printf("flush job unavailable %T", err)
+		return errors.New("flush job unavailable")
+	}
+	_, err = svc.RunAccepted(ctx, job.UserID, job.Date, h.now(), job.Lease)
+	if errors.As(err, new(draft.BusyError)) {
+		return nil
+	}
+	if err != nil {
+		log.Printf("flush job failed %T detail=%s", err, redact(err.Error()))
+		return errors.New("flush job failed")
+	}
+	return nil
+}
+
+// DispatchFlush selects the nightly sweep or one accepted day.
+// A scheduled event has source aws.events. Anything else is a finish job.
+func (h *Handler) DispatchFlush(ctx context.Context, raw json.RawMessage) error {
+	var head struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return err
+	}
+	if head.Source == "aws.events" {
+		var event events.CloudWatchEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return err
+		}
+		return h.HandleFlush(ctx, event)
+	}
+	var job draft.FlushJob
+	if err := json.Unmarshal(raw, &job); err != nil {
+		return err
+	}
+	return h.HandleFlushJob(ctx, job)
 }
 
 func (h *Handler) route(ctx context.Context, event events.APIGatewayV2HTTPRequest, method, path string) (any, int, error) {
@@ -358,7 +412,17 @@ func (h *Handler) finishDay(ctx context.Context, event events.APIGatewayV2HTTPRe
 	if err != nil {
 		return nil, 0, err
 	}
-	body, err := svc.Flush(ctx, userID, checked, h.now(), true)
+	body, err := svc.Accept(ctx, userID, checked, h.now(), h.enqueue)
+	var enqueueErr *draft.EnqueueError
+	if errors.As(err, &enqueueErr) {
+		logServerError(ctx, event, "flush enqueue failed", enqueueErr, "反映を開始できませんでした")
+		if body.Date == "" {
+			body.Date = checked
+		}
+		body.Status = draft.StatusFailed
+		body.Synced = false
+		return body, 200, nil
+	}
 	return body, 200, err
 }
 
@@ -517,6 +581,7 @@ func (h *Handler) overlayBootstrap(ctx context.Context, event events.APIGatewayV
 		body.Logs[name] = pair
 	}
 	body.DaySynced = history.Synced
+	body.FlushStatus = history.Status
 	return body, nil
 }
 
@@ -545,7 +610,7 @@ func (h *Handler) draftHistory(ctx context.Context, event events.APIGatewayV2HTT
 	if err != nil {
 		return draft.History{}, false, nil
 	}
-	history, err := reader.History(ctx, userID, date)
+	history, err := reader.History(ctx, userID, date, h.now())
 	if err != nil {
 		return draft.History{}, false, err
 	}

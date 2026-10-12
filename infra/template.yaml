@@ -278,6 +278,13 @@ Resources:
                 Condition:
                   StringEquals:
                     kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+              # Start the flush function and return. Notion runs there, not in this 20s handler.
+              - Sid: InvokeFlushFunction
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-${Environment}-flush
 
   ApiFunction:
     Type: AWS::Serverless::Function
@@ -316,6 +323,7 @@ Resources:
           # HttpApi events, the CSP policy, and the distribution would cycle.
           ALLOWED_ORIGIN: !Ref SpaAllowedOrigin
           ENVIRONMENT: !Ref Environment
+          FLUSH_FUNCTION_NAME: !Sub ${ProjectName}-${Environment}-flush
       Events:
         HealthGet:
           Type: HttpApi
@@ -379,8 +387,8 @@ Resources:
       Handler: bootstrap
       Runtime: provided.al2023
       Role: !GetAtt ApiFunctionRole.Arn
-      Timeout: 120
-      Description: Flush workout drafts once the session date is two Tokyo days old.
+      Timeout: 300
+      Description: Flush workout drafts once the session date is two Tokyo days old, and finish jobs accepted by the API.
       Environment:
         Variables:
           HANDLER_MODE: flush

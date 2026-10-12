@@ -154,7 +154,7 @@ describe("FlushFunction", () => {
     expect(flush).toContain("FunctionName: !Sub ${ProjectName}-${Environment}-flush");
     expect(flush).toContain("Role: !GetAtt ApiFunctionRole.Arn");
     expect(flush).toContain("CodeUri: ../api/");
-    expect(flush).toContain("Timeout: 120");
+    expect(flush).toContain("Timeout: 300");
     expect(flush).toContain("HANDLER_MODE: flush");
     expect(flush).toContain("Schedule: cron(10 15 * * ? *)");
     expect(flush).toContain("Name: !Sub ${ProjectName}-${Environment}-flush-drafts");
@@ -165,7 +165,13 @@ describe("FlushFunction", () => {
       template.indexOf("Events:", apiStart),
     );
     expect(apiEnv).not.toContain("HANDLER_MODE");
+    expect(apiEnv).toContain("FLUSH_FUNCTION_NAME: !Sub ${ProjectName}-${Environment}-flush");
+    expect(flush).not.toContain("FLUSH_FUNCTION_NAME");
     expect(template.match(/HANDLER_MODE: flush/g)).toHaveLength(1);
+    const invoke = statement("InvokeFlushFunction");
+    expect(invoke).toContain("lambda:InvokeFunction");
+    expect(invoke).toContain("function:${ProjectName}-${Environment}-flush");
+    expect(invoke).not.toContain('Resource: "*"');
   });
 });
 

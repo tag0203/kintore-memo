@@ -178,7 +178,7 @@ CI から `workflow_call` で Deploy を呼ぶ方式にはしていません。�
 意図的に外しているもの:
 
 - Lambda ロググループに対する `logs:DescribeLogStreams` / `GetLogEvents` / `FilterLogEvents`。HTTP API のアクセスログを有効にするとき AWS がこの 3 つを要求するので、アクセスロググループにだけ付ける
-- Lambda 実行ロールの PermissionsBoundary の拡大。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、実行中の Lambda の権限ではない
+- デプロイロールへの `lambda:InvokeFunction`。終了の非同期呼び出しは API の実行ロールだけが行い、境界 `kintore-memo-api-permissions-boundary` が関数 `kintore-memo-*-flush` への `lambda:InvokeFunction` を許す。アクセスログは API Gateway のログ配信が書き、予約同時実行は関数の設定であって、デプロイロールの権限ではない
 - アクセスキーの作成（明示的に拒否）
 - Notion 用 SSM（`/kintore-memo/*/notion/*`）の読み書き（明示的に拒否）。ただし境界導入後も、正当な API ロール経由の Notion 読取は Lambda コード変更で間接利用され得る。デプロイ担当が SSM を直接読めないことと、Lambda が読めないことは別
 - スタックの削除（`cloudformation:DeleteStack` は付けていません。削除は手元の管理者で行います）
@@ -228,7 +228,7 @@ aws cloudformation describe-stacks \
 
 ## 下書きの自動反映を先に適用する
 
-`infra/github-oidc.yaml` に、関数 `kintore-memo-*-flush`、そのロググループ、EventBridge ルール `rule/kintore-memo-*` の権限を足しています。境界ポリシー `kintore-memo-api-permissions-boundary` も、flush 関数のロググループへの `logs:CreateLogStream` と `logs:PutLogEvents` を許可します。アプリの `sam deploy` より先に、手元の管理者でスタック `kintore-memo-github-oidc` を更新します。Actions からは更新しません。
+`infra/github-oidc.yaml` に、関数 `kintore-memo-*-flush`、そのロググループ、EventBridge ルール `rule/kintore-memo-*` の権限を足しています。境界ポリシー `kintore-memo-api-permissions-boundary` も、flush 関数のロググループへの `logs:CreateLogStream` と `logs:PutLogEvents` を許可します。同じ境界に `lambda:InvokeFunction` を、関数 `kintore-memo-*-flush` とそのバージョンへ足しています。API ロールが終了を非同期で渡すためです。デプロイロール自体には `lambda:InvokeFunction` を足していません。アプリの `sam deploy` より先に、手元の管理者でスタック `kintore-memo-github-oidc` を更新します。Actions からは更新しません。境界を更新する前にアプリをデプロイすると、ロールのポリシーは書けても、実行時の Invoke は境界で拒否されます。
 
 `main` は PR 必須です。マージ後、CI が成功すると `workflow_run` で `dev` が自動デプロイされます。先にこのスタックを更新しないと、そのデプロイが権限不足で失敗します。この変更を含むツリーで、リポジトリルートから実行します。
 

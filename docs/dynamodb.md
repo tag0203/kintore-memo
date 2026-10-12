@@ -97,9 +97,11 @@ Notion のキャッシュはデプロイにつきデータベースが 1 つな�
 | `version` | Number | 条件付き書き込みの版 |
 | `flushLeaseToken` | String | 反映中の呼び出しを識別する。空なら誰も持っていない |
 | `flushLeaseUntil` | Number | そのリースの期限（Unix 秒）。期限のあと別の反映が引き継げる |
+| `flushStatus` | String | `running` または `failed`。空なら反映を始めていない |
+| `flushJobLease` | String | 受け付けた終了の識別子。同じ終了のやり直しだけが引き継げる |
 | `ttl` | Number | 下表 |
 
-`notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。ページ ID が空でも、Notion の `下書きID`（下書きの UUID）が同じ行があれば、そのページを再利用してから ID を保存します。反映中は `flushLeaseToken` を条件付きで書き、重なった終了は Notion を呼びません。
+`notionPageId` は、その行の Notion ページを作ったあとだけ入ります。反映のやり直しは、ページ ID がある行をスキップします。ページ ID が空でも、Notion の `下書きID`（下書きの UUID）が同じ行があれば、そのページを再利用してから ID を保存します。`POST /api/day/{date}/finish` は受付だけです。API は `flushLeaseToken` を条件付きで書き、flush 関数を非同期で起動して返します。反映中の作成・修正・削除は 409 です。受付のリースは 60 秒、flush 関数が引き継いだあとは 360 秒です。関数のタイムアウトは 300 秒です。
 
 ## FlushIndex の属性
 
@@ -170,7 +172,7 @@ Lambda ロール `ApiFunctionRole` の `DynamoDBTableAccess` は、`GetItem` / `
 
 ## 下書き（#49）
 
-保存は Notion に書かず、`DraftDay` に足します。`終了` の `POST /api/day/{date}/finish` がその日の行を Notion に書き、各行の `notionPageId` を成功のあとに保存し、全部終わってから `synced` を true にします。同じ日をもう一度終了しても、ページ ID がある行は Notion に書きません。反映済みの日への作成・修正・削除は 409 です。修正は Notion で行います。
+保存は Notion に書かず、`DraftDay` に足します。`終了` の `POST /api/day/{date}/finish` は反映を受け付けて `flushing` を返します。Notion への書き込みは flush 関数が行い、各行の `notionPageId` を成功のあとに保存し、全部終わってから `synced` を true にします。画面は `GET /api/drafts` の `status`（`flushing` / `synced` / `failed`）を見ます。同じ日をもう一度終了しても、ページ ID がある行は Notion に書きません。反映中と反映済みの日への作成・修正・削除は 409 です。反映済みの修正は Notion で行います。
 
 書き込みできる日付は DayPlan と同じ、東京の当日・前日・翌日です。終了を押し忘れた日は、その日付が東京時間で 2 日前になったあと（日付 +2 日の 0:00 すぎ）に、毎日 00:10（Asia/Tokyo）の Lambda が反映します。ジョブの cron は UTC の `cron(10 15 * * ? *)` です。失敗した日は次の夜にやり直します。
 

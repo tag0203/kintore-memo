@@ -494,8 +494,9 @@ describe("http workout client", () => {
       expect(await workout.getLogOnDate("スクワット", date)).toMatchObject([{ weightKg: 85 }]);
       await workout.deleteLog("draft-1");
       expect(await workout.getLogOnDate("スクワット", date)).toEqual([]);
-      await workout.finishDay(date);
+      expect(await workout.finishDay(date)).toBe("synced");
       expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("synced");
       expect(calls).toContain("PUT /dev/api/logs/draft-1");
       expect(calls).toContain("DELETE /dev/api/logs/draft-1");
       expect(calls).toContain(`POST /dev/api/day/${date}/finish`);
@@ -521,6 +522,38 @@ describe("http workout client", () => {
       const workout = client();
       await workout.listExercises(date);
       expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("synced");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the day in progress until a later read says it synced", async () => {
+    let finishReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input));
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.pathname.endsWith("/finish")) {
+          return Response.json({ date, status: "flushing", synced: false, flushed: 0 });
+        }
+        if (method === "GET" && url.pathname.endsWith("/api/drafts")) {
+          finishReads += 1;
+          const status = finishReads < 2 ? "flushing" : "synced";
+          return Response.json({ date, status, synced: status === "synced", drafts: [] });
+        }
+        return Response.json({ error: "予期しない経路" }, { status: 500 });
+      }),
+    );
+    try {
+      const workout = client();
+      expect(await workout.finishDay(date)).toBe("flushing");
+      expect(workout.isDayClosed(date)).toBe(true);
+      expect(workout.dayStatus(date)).toBe("flushing");
+      expect(await workout.refreshDayStatus(date)).toBe("flushing");
+      expect(await workout.refreshDayStatus(date)).toBe("synced");
+      expect(workout.dayStatus(date)).toBe("synced");
     } finally {
       vi.unstubAllGlobals();
     }

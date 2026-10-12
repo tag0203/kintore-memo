@@ -1,6 +1,6 @@
 import { apiUrl, authorizedFetch } from "../auth/authorizedFetch";
 import { isDifficulty, tokyoCivilDate, type ExerciseLog, type ExerciseSummary, type NewExerciseLog } from "../domain";
-import type { WorkoutLogClient } from "./client";
+import type { DayFlushStatus, WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { chronological } from "./logRows";
 import { requestIdFromPayload } from "./requestId";
@@ -174,6 +174,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
 
   let cache: SessionCache | null = null;
   const closedDates = new Set<string>();
+  const statuses = new Map<string, DayFlushStatus>();
   let pending = new Set<string>();
   let scheduledDate: string | null = null;
   let scheduled: Promise<void> | null = null;
@@ -206,7 +207,7 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     const payload = await request(bootstrapPath(date, names), { method: "GET" }, "記録の取得に失敗しました");
     // 日付を切り替えたあとに、前の日付の応答でキャッシュを上書きしない。
     if (epoch !== cacheEpoch) return false;
-    if (isRecord(payload) && payload.daySynced === true) closedDates.add(date);
+    rememberStatus(date, readFlushStatus(payload));
     const parsed = parseBootstrap(payload);
     if (!cache || cache.date !== date) {
       cache = { date, exercises: [], logs: new Map(), catalogReady: false };
@@ -324,6 +325,20 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     }
   }
 
+  function readFlushStatus(payload: unknown): DayFlushStatus {
+    if (!isRecord(payload)) return "open";
+    const raw = payload.status ?? payload.flushStatus;
+    if (payload.synced === true || payload.daySynced === true || raw === "synced") return "synced";
+    if (raw === "flushing") return "flushing";
+    if (raw === "failed") return "failed";
+    return "open";
+  }
+
+  function rememberStatus(date: string, status: DayFlushStatus): void {
+    statuses.set(date, status);
+    if (status === "synced") markDaySynced(date);
+  }
+
   function markDaySynced(date: string): void {
     closedDates.add(date);
     if (!cache || cache.date !== date) return;
@@ -403,16 +418,34 @@ export function createHttpWorkoutClient(options: HttpWorkoutClientOptions): Work
     },
 
     async finishDay(date) {
-      await request(
+      const payload = await request(
         `/api/day/${encodeURIComponent(date)}/finish`,
         { method: "POST" },
         "Notion への反映に失敗しました",
       );
-      markDaySynced(date);
+      const status = readFlushStatus(payload);
+      rememberStatus(date, status);
+      return status;
+    },
+
+    async refreshDayStatus(date) {
+      const payload = await request(
+        `/api/drafts?date=${encodeURIComponent(date)}`,
+        { method: "GET" },
+        "記録の取得に失敗しました",
+      );
+      const status = readFlushStatus(payload);
+      rememberStatus(date, status);
+      return status;
+    },
+
+    dayStatus(date) {
+      return statuses.get(date) ?? (closedDates.has(date) ? "synced" : "open");
     },
 
     isDayClosed(date) {
-      return closedDates.has(date);
+      const status = statuses.get(date);
+      return status === "synced" || status === "flushing" || closedDates.has(date);
     },
 
     async touchExercise(name, atISO, onDate?: string) {

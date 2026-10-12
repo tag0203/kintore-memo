@@ -53,10 +53,15 @@ type DraftDayItem struct {
 	UpdatedAt  string     `dynamodbav:"updatedAt"`
 	TTL        int64      `dynamodbav:"ttl"`
 	Version    int        `dynamodbav:"version"`
-	// FlushLeaseToken is the in-flight flush. Another finish waits until it
-	// is cleared or FlushLeaseUntil (unix seconds) has passed.
+	// FlushLeaseToken is the in-flight flush. Another finish, and draft edits,
+	// wait until it is cleared or FlushLeaseUntil (unix seconds) has passed.
 	FlushLeaseToken string `dynamodbav:"flushLeaseToken,omitempty"`
 	FlushLeaseUntil int64  `dynamodbav:"flushLeaseUntil,omitempty"`
+	// FlushJobLease is the token from Accept. A retry of that same finish may
+	// claim it. A different finish cannot, while the lease is still in the future.
+	FlushJobLease string `dynamodbav:"flushJobLease,omitempty"`
+	// FlushStatus is "running" or "failed". Empty means no finish is in flight.
+	FlushStatus string `dynamodbav:"flushStatus,omitempty"`
 }
 
 // PendingDay is one unfinished user-day on the flush index.

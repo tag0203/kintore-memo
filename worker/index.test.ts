@@ -38,6 +38,12 @@ function client(partial: Partial<WorkoutLogClient> = {}): WorkoutLogClient {
     async finishDay() {
       throw new Error("参考実装は下書きを持ちません");
     },
+    async refreshDayStatus() {
+      throw new Error("参考実装は下書きを持ちません");
+    },
+    dayStatus() {
+      return "open";
+    },
     isDayClosed() {
       return false;
     },

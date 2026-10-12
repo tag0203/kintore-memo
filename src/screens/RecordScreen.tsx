@@ -264,7 +264,13 @@ export function RecordScreen({
                 )}
               </>
             )}
-            {closed && <p className="form-error">反映済みの記録は Notion で修正してください</p>}
+            {closed && (
+              <p className="form-error">
+                {client.dayStatus(session.date) === "flushing"
+                  ? "反映中"
+                  : "反映済みの記録は Notion で修正してください"}
+              </p>
+            )}
             {draft && (
               <>
                 <div className="field-row">

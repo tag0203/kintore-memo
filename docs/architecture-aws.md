@@ -122,7 +122,7 @@ Notion が記録の正です。DynamoDB はアプリが画面のために持つ�
 
 | データ | 正 | メモ |
 | --- | --- | --- |
-| 種目、重量、回数、セット数、きつさ、日付、タイトル | 反映前は DynamoDB の `DraftDay`。反映後は Notion | 保存は下書き。`終了` か、東京時間で日付 +2 日の 0:10 のジョブが Notion に 1 行追加する。反映済みはアプリから直さない |
+| 種目、重量、回数、セット数、きつさ、日付、タイトル | 反映前は DynamoDB の `DraftDay`。反映後は Notion | 保存は下書き。`終了` は受付だけ。flush 関数（終了の非同期呼び出し、または東京時間で日付 +2 日の 0:10）が Notion に 1 行追加する。反映済みはアプリから直さない |
 | 前回 | Notion から導出 | その種目で、今日より前に記録がある最新の日の行をすべて |
 | 今日のメニュー、部位メモ、終了 / 再開 | DynamoDB の `DayPlan` 1 項目 | Go の `GET` / `PUT /api/day-plan`（[#6](https://github.com/tag0203/kintore-memo/issues/6)）。キーと TTL は [dynamodb.md](./dynamodb.md)。Cognito と API URL が無いローカルはブラウザのメモリ |
 | Notion 応答の短いキャッシュ | DynamoDB の `NotionCache`（任意） | 300 秒の TTL。正データではない。#10 |

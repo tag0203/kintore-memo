@@ -15,10 +15,27 @@ import (
 
 const pageTitle = "－"
 
-// flushLeaseFor outlives the flush Lambda (120s) and the API Lambda (20s).
-// The lease is cleared when this flush returns. Until then, another finish
-// does not call Notion.
-const flushLeaseFor = 150 * time.Second
+const (
+	// StatusOpen is a day that is not being written to Notion.
+	StatusOpen = "open"
+	// StatusFlushing means a finish has been accepted and the worker still holds the lease.
+	StatusFlushing = "flushing"
+	// StatusSynced means every row for the day is in Notion.
+	StatusSynced = "synced"
+	// StatusFailed means the last finish stopped before the day was synced.
+	StatusFailed = "failed"
+
+	flushRunning = "running"
+	flushFailed  = "failed"
+)
+
+// acceptLeaseFor covers the gap between accepting a finish and the worker
+// claiming the day. flushLeaseFor outlives the flush Lambda (300s).
+// Draft edits are rejected while either lease is still in the future.
+const (
+	acceptLeaseFor = 60 * time.Second
+	flushLeaseFor  = 360 * time.Second
+)
 
 // PageWriter creates one Notion page for a draft id.
 // AppendLog must look up that id before creating, and must return the page
@@ -43,14 +60,25 @@ func New(store Store, plans dayplan.Store, writer PageWriter) *Service {
 type ListResult struct {
 	Date   string              `json:"date"`
 	Synced bool                `json:"synced"`
+	Status string              `json:"status"`
 	Drafts []model.ExerciseLog `json:"drafts"`
 }
 
 // FinishResult is POST /api/day/{date}/finish.
+// Status is open, flushing, synced, or failed. The HTTP handler returns this
+// before Notion replies. Flushed is how many pages this call stored.
 type FinishResult struct {
 	Date    string `json:"date"`
 	Flushed int    `json:"flushed"`
 	Synced  bool   `json:"synced"`
+	Status  string `json:"status"`
+}
+
+// FlushJob is the payload the API hands to the flush Lambda.
+type FlushJob struct {
+	UserID string `json:"userId"`
+	Date   string `json:"date"`
+	Lease  string `json:"lease"`
 }
 
 // History is the session day plus other unfinished days for this user.
@@ -58,6 +86,7 @@ type History struct {
 	Session *ddb.DraftDayItem
 	Open    []ddb.DraftDayItem
 	Synced  bool
+	Status  string
 }
 
 // Create appends one draft. It does not call Notion.
@@ -92,6 +121,9 @@ func (s *Service) Create(ctx context.Context, userID string, input validate.Crea
 		UpdatedAt:  stamp,
 	}
 	item, err := s.updateDay(ctx, userID, input.Date, now, func(day *ddb.DraftDayItem) error {
+		if leaseActive(*day, now) {
+			return BusyError{}
+		}
 		if day.Synced {
 			return ConflictError{}
 		}
@@ -119,6 +151,9 @@ func (s *Service) Update(ctx context.Context, userID, id string, input validate.
 	}
 	var saved ddb.DraftRow
 	item, err := s.updateDay(ctx, userID, input.Date, now, func(day *ddb.DraftDayItem) error {
+		if leaseActive(*day, now) {
+			return BusyError{}
+		}
 		index := rowIndex(day.Drafts, id)
 		if index < 0 {
 			return &NotFoundError{}
@@ -167,6 +202,9 @@ func (s *Service) Delete(ctx context.Context, userID, id string, now time.Time) 
 		return &validate.Error{Msg: "日付を確認してください"}
 	}
 	_, err = s.updateDay(ctx, userID, day.Date, now, func(current *ddb.DraftDayItem) error {
+		if leaseActive(*current, now) {
+			return BusyError{}
+		}
 		index := rowIndex(current.Drafts, id)
 		if index < 0 {
 			return &NotFoundError{}
@@ -203,13 +241,13 @@ func (s *Service) List(ctx context.Context, userID, date string, now time.Time) 
 		return ListResult{}, err
 	}
 	if !found {
-		return ListResult{Date: date, Drafts: emptyLogs()}, nil
+		return ListResult{Date: date, Status: StatusOpen, Drafts: emptyLogs()}, nil
 	}
-	return ListResult{Date: date, Synced: item.Synced, Drafts: logsFromDay(item)}, nil
+	return ListResult{Date: date, Synced: item.Synced, Status: dayStatus(item, true, now), Drafts: logsFromDay(item)}, nil
 }
 
 // History loads the session day and other unfinished days for previous-log merge.
-func (s *Service) History(ctx context.Context, userID, date string) (History, error) {
+func (s *Service) History(ctx context.Context, userID, date string, now time.Time) (History, error) {
 	if _, err := ddb.AssertUserID(userID); err != nil {
 		return History{}, err
 	}
@@ -238,7 +276,7 @@ func (s *Service) History(ctx context.Context, userID, date string) (History, er
 		}
 		open = append(open, day)
 	}
-	history := History{Open: open, Synced: found && session.Synced}
+	history := History{Open: open, Synced: found && session.Synced, Status: dayStatus(session, found, now)}
 	if found {
 		history.Session = &session
 	}
@@ -267,13 +305,101 @@ func (s *Service) Due(ctx context.Context, now time.Time) ([]ddb.PendingDay, err
 	return due, nil
 }
 
+// Accept records a finish and returns without calling Notion.
+// enqueue receives the lease token the worker must claim. A day that is already
+// synced, or already flushing, does not enqueue again. An empty day is closed here.
+func (s *Service) Accept(ctx context.Context, userID, date string, now time.Time, enqueue func(context.Context, FlushJob) error) (FinishResult, error) {
+	if _, err := ddb.AssertUserID(userID); err != nil {
+		return FinishResult{}, err
+	}
+	if _, err := ddb.AssertISODate(date); err != nil {
+		return FinishResult{}, err
+	}
+	if err := s.writable(userID, date, now); err != nil {
+		return FinishResult{}, err
+	}
+	lease, err := newDraftID()
+	if err != nil {
+		return FinishResult{}, err
+	}
+	outcome := ""
+	_, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+		if day.Synced {
+			outcome = "synced"
+			return errNoWrite
+		}
+		if leaseActive(*day, now) {
+			outcome = "busy"
+			return errNoWrite
+		}
+		if !hasPendingDraft(day) {
+			outcome = "close"
+			day.Synced = true
+			day.FlushStatus = ""
+			day.FlushLeaseToken = ""
+			day.FlushJobLease = ""
+			day.FlushLeaseUntil = 0
+			if day.Drafts == nil {
+				day.Drafts = []ddb.DraftRow{}
+			}
+			return nil
+		}
+		outcome = "queued"
+		day.FlushLeaseToken = lease
+		day.FlushJobLease = lease
+		day.FlushLeaseUntil = now.Add(acceptLeaseFor).Unix()
+		day.FlushStatus = flushRunning
+		return nil
+	})
+	if err != nil {
+		return FinishResult{Date: date, Status: StatusFailed}, err
+	}
+	switch outcome {
+	case "synced":
+		return FinishResult{Date: date, Status: StatusSynced, Synced: true}, nil
+	case "busy":
+		return FinishResult{Date: date, Status: StatusFlushing}, nil
+	case "close":
+		if err = s.markFinished(ctx, userID, date, now); err != nil {
+			return FinishResult{Date: date, Status: StatusFailed}, err
+		}
+		if err = s.removePending(ctx, userID, date, now); err != nil {
+			return FinishResult{Date: date, Status: StatusFailed}, err
+		}
+		return FinishResult{Date: date, Status: StatusSynced, Synced: true}, nil
+	default:
+		if enqueue == nil {
+			_ = s.clearLease(ctx, userID, date, now, lease, true)
+			return FinishResult{Date: date, Status: StatusFailed}, &EnqueueError{}
+		}
+		if err = enqueue(ctx, FlushJob{UserID: userID, Date: date, Lease: lease}); err != nil {
+			_ = s.clearLease(ctx, userID, date, now, lease, true)
+			return FinishResult{Date: date, Status: StatusFailed}, &EnqueueError{Err: err}
+		}
+		return FinishResult{Date: date, Status: StatusFlushing}, nil
+	}
+}
+
+// RunAccepted is the worker path for a finish Accept already leased.
+// It claims that lease, then writes Notion. A second worker for the same job gets BusyError.
+func (s *Service) RunAccepted(ctx context.Context, userID, date string, now time.Time, lease string) (FinishResult, error) {
+	if _, err := ddb.AssertDraftID(lease); err != nil {
+		return FinishResult{}, err
+	}
+	return s.flush(ctx, userID, date, now, true, lease)
+}
+
 // Flush writes every row that does not yet have a Notion page id, then marks the day synced.
 // closeDay is the manual 「終了」 path: an empty day is still closed.
 // The nightly job passes closeDay false and must only call this for due dates.
 // A second call does not create another Notion page for a row that already has an id.
 // Overlapping calls take a conditional lease on the DraftDay item. The writer
 // looks up the draft id in Notion before creating a page.
-func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time, closeDay bool) (result FinishResult, err error) {
+func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time, closeDay bool) (FinishResult, error) {
+	return s.flush(ctx, userID, date, now, closeDay, "")
+}
+
+func (s *Service) flush(ctx context.Context, userID, date string, now time.Time, closeDay bool, jobLease string) (result FinishResult, err error) {
 	if _, err = ddb.AssertUserID(userID); err != nil {
 		return FinishResult{}, err
 	}
@@ -287,21 +413,39 @@ func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time,
 			return FinishResult{}, err
 		}
 		if !due {
-			return FinishResult{Date: date, Synced: false}, nil
+			return FinishResult{Date: date, Status: StatusOpen}, nil
 		}
 	} else if err = s.writable(userID, date, now); err != nil {
 		return FinishResult{}, err
 	}
-	owner, err := newDraftID()
-	if err != nil {
-		return FinishResult{}, err
-	}
+	owner := ""
 	held := false
+	if jobLease != "" {
+		var claimed string
+		claimed, err = s.claimAcceptedLease(ctx, userID, date, now, jobLease)
+		if errors.Is(err, errAlreadyDone) {
+			return FinishResult{Date: date, Status: StatusSynced, Synced: true}, nil
+		}
+		if err != nil {
+			status := StatusFailed
+			if errors.As(err, new(BusyError)) {
+				status = StatusFlushing
+			}
+			return FinishResult{Date: date, Status: status}, err
+		}
+		owner = claimed
+		held = true
+	} else {
+		owner, err = newDraftID()
+		if err != nil {
+			return FinishResult{}, err
+		}
+	}
 	defer func() {
 		if !held {
 			return
 		}
-		_ = s.releaseLease(ctx, userID, date, now, owner)
+		_ = s.clearLease(ctx, userID, date, now, owner, err != nil)
 	}()
 	created := 0
 	for {
@@ -314,21 +458,21 @@ func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time,
 				return FinishResult{}, err
 			}
 			held = false
-			return FinishResult{Date: date, Flushed: created, Synced: true}, nil
+			return FinishResult{Date: date, Flushed: created, Status: StatusSynced, Synced: true}, nil
 		}
 		if found && item.Synced {
 			break
 		}
 		if !held {
 			if err = s.acquireLease(ctx, userID, date, now, owner); err != nil {
-				return FinishResult{Date: date, Flushed: created, Synced: false}, err
+				return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, err
 			}
 			held = true
 			continue
 		}
 		if found && leaseHeldByOther(item, now, owner) {
 			held = false
-			return FinishResult{Date: date, Flushed: created, Synced: false}, BusyError{}
+			return FinishResult{Date: date, Flushed: created, Status: StatusFlushing}, BusyError{}
 		}
 		var pending *ddb.DraftRow
 		if found {
@@ -341,22 +485,27 @@ func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time,
 		}
 		if pending == nil {
 			if _, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+				if leaseHeldByOther(*day, now, owner) {
+					return BusyError{}
+				}
 				day.Synced = true
+				day.FlushStatus = ""
 				day.FlushLeaseToken = ""
+				day.FlushJobLease = ""
 				day.FlushLeaseUntil = 0
 				if day.Drafts == nil {
 					day.Drafts = []ddb.DraftRow{}
 				}
 				return nil
 			}); err != nil {
-				return FinishResult{Date: date, Flushed: created, Synced: false}, err
+				return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, err
 			}
 			break
 		}
 		row := *pending
 		pageID, writeErr := s.writePage(ctx, date, row)
 		if writeErr != nil {
-			return FinishResult{Date: date, Flushed: created, Synced: false}, writeErr
+			return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, writeErr
 		}
 		if _, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
 			if leaseHeldByOther(*day, now, owner) {
@@ -370,18 +519,52 @@ func (s *Service) Flush(ctx context.Context, userID, date string, now time.Time,
 			}
 			return nil
 		}); err != nil {
-			return FinishResult{Date: date, Flushed: created, Synced: false}, err
+			return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, err
 		}
 		created++
 	}
 	if err = s.markFinished(ctx, userID, date, now); err != nil {
-		return FinishResult{Date: date, Flushed: created, Synced: false}, err
+		return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, err
 	}
 	if err = s.removePending(ctx, userID, date, now); err != nil {
-		return FinishResult{Date: date, Flushed: created, Synced: false}, err
+		return FinishResult{Date: date, Flushed: created, Status: StatusFailed}, err
 	}
 	held = false
-	return FinishResult{Date: date, Flushed: created, Synced: true}, nil
+	return FinishResult{Date: date, Flushed: created, Status: StatusSynced, Synced: true}, nil
+}
+
+var errAlreadyDone = errors.New("draft day already synced")
+
+func hasPendingDraft(day *ddb.DraftDayItem) bool {
+	if day == nil {
+		return false
+	}
+	for i := range day.Drafts {
+		if day.Drafts[i].NotionPageID == "" {
+			return true
+		}
+	}
+	return false
+}
+
+func dayStatus(day ddb.DraftDayItem, found bool, now time.Time) string {
+	if !found {
+		return StatusOpen
+	}
+	if day.Synced {
+		return StatusSynced
+	}
+	if leaseActive(day, now) {
+		return StatusFlushing
+	}
+	if day.FlushStatus == flushFailed || day.FlushStatus == flushRunning {
+		return StatusFailed
+	}
+	return StatusOpen
+}
+
+func leaseActive(day ddb.DraftDayItem, now time.Time) bool {
+	return day.FlushLeaseToken != "" && day.FlushLeaseUntil > now.Unix()
 }
 
 func leaseHeldByOther(day ddb.DraftDayItem, now time.Time, owner string) bool {
@@ -401,18 +584,53 @@ func (s *Service) acquireLease(ctx context.Context, userID, date string, now tim
 		}
 		day.FlushLeaseToken = owner
 		day.FlushLeaseUntil = now.Add(flushLeaseFor).Unix()
+		day.FlushStatus = flushRunning
 		return nil
 	})
 	return err
 }
 
-func (s *Service) releaseLease(ctx context.Context, userID, date string, now time.Time, owner string) error {
+func (s *Service) claimAcceptedLease(ctx context.Context, userID, date string, now time.Time, jobLease string) (string, error) {
+	owner, err := newDraftID()
+	if err != nil {
+		return "", err
+	}
+	synced := false
+	_, err = s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
+		if day.Synced {
+			synced = true
+			return errNoWrite
+		}
+		sameJob := day.FlushJobLease == jobLease || day.FlushLeaseToken == jobLease
+		if leaseActive(*day, now) && !sameJob {
+			return BusyError{}
+		}
+		day.FlushJobLease = jobLease
+		day.FlushLeaseToken = owner
+		day.FlushLeaseUntil = now.Add(flushLeaseFor).Unix()
+		day.FlushStatus = flushRunning
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if synced {
+		return "", errAlreadyDone
+	}
+	return owner, nil
+}
+
+func (s *Service) clearLease(ctx context.Context, userID, date string, now time.Time, owner string, failed bool) error {
 	_, err := s.updateDay(ctx, userID, date, now, func(day *ddb.DraftDayItem) error {
 		if day.FlushLeaseToken != owner {
 			return errNoWrite
 		}
 		day.FlushLeaseToken = ""
+		day.FlushJobLease = ""
 		day.FlushLeaseUntil = 0
+		if failed && !day.Synced {
+			day.FlushStatus = flushFailed
+		}
 		return nil
 	})
 	return err

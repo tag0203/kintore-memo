@@ -8,7 +8,7 @@ import {
   type ExerciseSummary,
   type NewExerciseLog,
 } from "../domain";
-import type { WorkoutLogClient } from "./client";
+import type { DayFlushStatus, WorkoutLogClient } from "./client";
 import { assertCatalogName } from "./exerciseName";
 import { logsOnDate, previousDayLogs } from "./logRows";
 import type { MockSnapshot } from "./seed";
@@ -17,7 +17,8 @@ const CLOSED_DAY = "反映済みの記録は Notion で修正してください"
 
 export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
   const state: MockSnapshot = structuredClone(snapshot);
-  const closed = new Set<string>();
+    const closed = new Set<string>();
+    const statuses = new Map<string, DayFlushStatus>();
 
   function assertDraft(log: ExerciseLog | undefined): ExerciseLog {
     if (!log) throw new Error("見つかりません");
@@ -93,13 +94,24 @@ export function createMockClient(snapshot: MockSnapshot): WorkoutLogClient {
     async finishDay(date: string) {
       if (!isISODate(date)) throw new Error("日付が不正です");
       closed.add(date);
+      statuses.set(date, "synced");
       for (const log of state.logs) {
         if (log.date === date && log.synced === false) log.synced = true;
       }
+      return "synced" as const;
+    },
+
+    async refreshDayStatus(date: string) {
+      return statuses.get(date) ?? (closed.has(date) ? "synced" : "open");
+    },
+
+    dayStatus(date: string) {
+      return statuses.get(date) ?? (closed.has(date) ? "synced" : "open");
     },
 
     isDayClosed(date: string) {
-      return closed.has(date);
+      const status = statuses.get(date);
+      return status === "synced" || status === "flushing" || closed.has(date);
     },
 
     async touchExercise(name: string, atISO: string) {

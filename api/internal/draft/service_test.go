@@ -3,6 +3,7 @@ package draft
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -476,5 +477,121 @@ func TestFlushLeaseBlocksAConcurrentFinish(t *testing.T) {
 	done, err := svc.Flush(ctx, userID, "2026-10-02", now, true)
 	if err != nil || !done.Synced || inner.calls != 2 {
 		t.Fatalf("expired lease = %+v calls %d err %v", done, inner.calls, err)
+	}
+}
+
+func TestDraftEditsAreRejectedWhileTheFlushLeaseIsHeld(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	svc := New(store, dayplan.NewMemory(), &fakeWriter{})
+	created, err := svc.Create(ctx, userID, input(80), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ddb.DraftDayKey(userID, "2026-10-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	day, err := store.GetDay(ctx, key.PK, key.SK)
+	if err != nil || day == nil {
+		t.Fatal(err)
+	}
+	day.FlushLeaseToken = "someone-else"
+	day.FlushLeaseUntil = now.Add(time.Minute).Unix()
+	day.FlushStatus = flushRunning
+	if err := store.PutDay(ctx, *day, day.Version, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, userID, input(90), now); !errors.As(err, new(BusyError)) {
+		t.Fatalf("create during flush = %v", err)
+	}
+	if _, err := svc.Update(ctx, userID, created.ID, input(70), now); !errors.As(err, new(BusyError)) {
+		t.Fatalf("update during flush = %v", err)
+	}
+	if err := svc.Delete(ctx, userID, created.ID, now); !errors.As(err, new(BusyError)) {
+		t.Fatalf("delete during flush = %v", err)
+	}
+	listed, err := svc.List(ctx, userID, "2026-10-02", now)
+	if err != nil || listed.Status != StatusFlushing || len(listed.Drafts) != 1 || listed.Drafts[0].WeightKg != 80 {
+		t.Fatalf("list during flush = %+v %v", listed, err)
+	}
+	day.FlushLeaseUntil = now.Add(-time.Second).Unix()
+	if err := store.PutDay(ctx, *day, day.Version, true); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(ctx, userID, created.ID, input(70), now.Add(time.Second))
+	if err != nil || updated.WeightKg != 70 {
+		t.Fatalf("update after expiry = %+v %v", updated, err)
+	}
+}
+
+func TestAcceptHandsNotionToTheWorker(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	writer := &fakeWriter{}
+	svc := New(store, dayplan.NewMemory(), writer)
+	created, err := svc.Create(ctx, userID, input(80), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queued FlushJob
+	calls := 0
+	accepted, err := svc.Accept(ctx, userID, "2026-10-02", now, func(_ context.Context, job FlushJob) error {
+		calls++
+		queued = job
+		return nil
+	})
+	if err != nil || accepted.Status != StatusFlushing || accepted.Synced || writer.calls != 0 || calls != 1 {
+		t.Fatalf("accept = %+v enqueue %d notion %d err %v", accepted, calls, writer.calls, err)
+	}
+	if _, err := svc.Update(ctx, userID, created.ID, input(70), now); !errors.As(err, new(BusyError)) {
+		t.Fatalf("edit after accept = %v", err)
+	}
+	again, err := svc.Accept(ctx, userID, "2026-10-02", now, func(context.Context, FlushJob) error {
+		calls++
+		return nil
+	})
+	if err != nil || again.Status != StatusFlushing || calls != 1 {
+		t.Fatalf("second accept = %+v enqueue %d err %v", again, calls, err)
+	}
+	done, err := svc.RunAccepted(ctx, queued.UserID, queued.Date, now, queued.Lease)
+	if err != nil || !done.Synced || done.Flushed != 1 || writer.calls != 1 {
+		t.Fatalf("worker = %+v calls %d err %v", done, writer.calls, err)
+	}
+	listed, err := svc.List(ctx, userID, "2026-10-02", now)
+	if err != nil || listed.Status != StatusSynced || listed.Drafts[0].Synced == nil || !*listed.Drafts[0].Synced {
+		t.Fatalf("after worker = %+v %v", listed, err)
+	}
+	repeat, err := svc.RunAccepted(ctx, queued.UserID, queued.Date, now, queued.Lease)
+	if err != nil || !repeat.Synced || writer.calls != 1 {
+		t.Fatalf("repeat worker = %+v calls %d err %v", repeat, writer.calls, err)
+	}
+}
+
+func TestAcceptFailureLetsTheDraftBeEditedAgain(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	svc := New(store, dayplan.NewMemory(), &fakeWriter{})
+	created, err := svc.Create(ctx, userID, input(80), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := svc.Accept(ctx, userID, "2026-10-02", now, func(context.Context, FlushJob) error {
+		return errors.New("invoke arn:aws:lambda:ap-northeast-1:123456789012:function:kintore-memo-dev-flush")
+	})
+	var enqueue *EnqueueError
+	if !errors.As(err, &enqueue) || failed.Status != StatusFailed || enqueue.Error() != "flush enqueue failed" {
+		t.Fatalf("enqueue = %+v err %v", failed, err)
+	}
+	if strings.Contains(err.Error(), "arn:aws") || strings.Contains(err.Error(), "123456789012") {
+		t.Fatalf("enqueue error leaked config: %v", err)
+	}
+	updated, err := svc.Update(ctx, userID, created.ID, input(70), now)
+	if err != nil || updated.WeightKg != 70 {
+		t.Fatalf("edit after failed enqueue = %+v %v", updated, err)
+	}
+	listed, err := svc.List(ctx, userID, "2026-10-02", now)
+	if err != nil || listed.Status != StatusFailed {
+		t.Fatalf("status = %+v %v", listed, err)
 	}
 }

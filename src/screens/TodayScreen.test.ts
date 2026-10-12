@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { Modal } from "../components/Modal";
 import type { ExerciseLog } from "../domain";
-import { SessionDatePicker, TodayExerciseRow, removalConfirmBody } from "./TodayScreen";
+import { SessionDatePicker, TodayExerciseRow, removalConfirmBody, todayFinishView } from "./TodayScreen";
 
 function log(id: string): ExerciseLog {
   return {
@@ -96,6 +96,33 @@ describe("TodayExerciseRow", () => {
     expect(card).not.toContain("削除");
     expect(html).toContain("修正");
     expect(html).toContain("スクワットの下書きを削除");
+  });
+});
+
+describe("todayFinishView", () => {
+  it("hides 再開する after the day was sent to Notion", () => {
+    expect(todayFinishView(true, "synced")).toEqual({
+      showResume: false,
+      showAdd: false,
+      showEnd: false,
+      showRetry: false,
+      message: "送信済み。修正は Notion で",
+    });
+  });
+
+  it("shows 反映中 while the worker is writing, and a retry after failure", () => {
+    expect(todayFinishView(true, "flushing").message).toBe("反映中");
+    expect(todayFinishView(true, "flushing").showResume).toBe(false);
+    expect(todayFinishView(true, "failed")).toMatchObject({
+      showResume: false,
+      showRetry: true,
+      message: "失敗。もう一度終了を",
+    });
+  });
+
+  it("keeps 再開する when the menu is closed and Notion has not been sent", () => {
+    expect(todayFinishView(true, "open").showResume).toBe(true);
+    expect(todayFinishView(false, "open").showEnd).toBe(true);
   });
 });
 

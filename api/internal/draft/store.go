@@ -13,10 +13,24 @@ import (
 var ErrVersionConflict = errors.New("draft version conflict")
 
 // BusyError is a 409. Another flush holds this day's lease.
+// Draft create, update, and delete return it too, so a row cannot change
+// while Notion is being written.
 type BusyError struct{}
 
 func (BusyError) Error() string {
 	return "反映しています。少し待ってからもう一度終了してください"
+}
+
+// EnqueueError is a failed async handoff. The client sees a failed finish, not the cause.
+type EnqueueError struct{ Err error }
+
+func (e *EnqueueError) Error() string { return "flush enqueue failed" }
+
+func (e *EnqueueError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
 }
 
 // ConflictError is a 409. The day or the row was already written to Notion.

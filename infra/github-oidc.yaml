@@ -124,6 +124,14 @@ Resources:
             Condition:
               StringEquals:
                 kms:ViaService: !Sub ssm.${AWS::Region}.amazonaws.com
+          # The API role invokes the flush function asynchronously. The deploy role does not.
+          - Sid: InvokeFlushFunction
+            Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:kintore-memo-*-flush:*
 
   # Role name is fixed and does not match kintore-memo-*-api, so this role cannot edit itself.
   GitHubDeployRole:

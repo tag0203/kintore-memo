@@ -339,6 +339,11 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 		backend := &fakeBackend{}
 		h := testHandler(backend, nil, dayplan.NewMemory())
 		h.drafts = draft.NewMemory()
+		var job draft.FlushJob
+		h.enqueue = func(_ context.Context, got draft.FlushJob) error {
+			job = got
+			return nil
+		}
 		body := fmt.Sprintf(
 			`{"exercise":"スクワット","weightKg":80,"reps":8,"sets":3,"difficulty":3,"date":"2026-10-02","title":"%s"}`,
 			marker,
@@ -347,15 +352,23 @@ func TestUpstreamErrorsDoNotLeak(t *testing.T) {
 		if err != nil || saved.StatusCode != 201 || backend.created != 0 {
 			t.Fatalf("draft %d %v %s", saved.StatusCode, err, saved.Body)
 		}
-		backend.fail = cause
 		event := withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false))
 		event.RequestContext.RequestID = "VJ6r1Gq1iYcEJ9A="
 		event.Headers = map[string]string{"authorization": "Bearer " + token}
 		res, err := h.Handle(context.Background(), event)
-		if err != nil || res.StatusCode != 502 {
-			t.Fatalf("url %d %v %s", res.StatusCode, err, res.Body)
+		if err != nil || res.StatusCode != 200 || !strings.Contains(res.Body, `"status":"flushing"`) {
+			t.Fatalf("accept %d %v %s", res.StatusCode, err, res.Body)
 		}
-		assertSafe(t, res.StatusCode, res.Body, msgNotion, "VJ6r1Gq1iYcEJ9A=", "*url.Error")
+		if strings.Contains(res.Body, pageURL) || strings.Contains(res.Body, token) || strings.Contains(res.Body, marker) {
+			t.Fatalf("accept leaked: %s", res.Body)
+		}
+		backend.fail = cause
+		if err := h.HandleFlushJob(context.Background(), job); err == nil {
+			t.Fatal("worker should fail")
+		}
+		if strings.Contains(logs.String(), pageURL) || strings.Contains(logs.String(), token) || strings.Contains(logs.String(), marker) || !strings.Contains(logs.String(), "*url.Error") {
+			t.Fatalf("flush log leaked: %s", logs.String())
+		}
 	})
 
 	t.Run("unknown", func(t *testing.T) {
@@ -515,6 +528,11 @@ func TestDraftHTTPFinishIsIdempotent(t *testing.T) {
 	plans := dayplan.NewMemory()
 	h := testHandler(backend, nil, plans)
 	h.drafts = draft.NewMemory()
+	var jobs []draft.FlushJob
+	h.enqueue = func(_ context.Context, job draft.FlushJob) error {
+		jobs = append(jobs, job)
+		return nil
+	}
 	ctx := context.Background()
 	payload := `{"exercise":"スクワット","weightKg":80,"reps":8,"sets":3,"difficulty":4,"date":"2026-10-02"}`
 	created, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/logs", "$default", "", payload, false)))
@@ -542,11 +560,24 @@ func TestDraftHTTPFinishIsIdempotent(t *testing.T) {
 		t.Fatalf("update %d %s", updated.StatusCode, updated.Body)
 	}
 	finish, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false)))
-	if finish.StatusCode != 200 || backend.created != 1 || !strings.Contains(finish.Body, `"flushed":1`) || !strings.Contains(finish.Body, `"synced":true`) {
+	if finish.StatusCode != 200 || backend.created != 0 || !strings.Contains(finish.Body, `"status":"flushing"`) || strings.Contains(finish.Body, `"synced":true`) {
 		t.Fatalf("finish %d created %d %s", finish.StatusCode, backend.created, finish.Body)
 	}
+	if len(jobs) != 1 || strings.Contains(finish.Body, jobs[0].UserID) || strings.Contains(finish.Body, jobs[0].Lease) {
+		t.Fatalf("finish leaked the job: %s", finish.Body)
+	}
+	editing, _ := h.Handle(ctx, withUser(httpEvent("PUT", "/api/logs/"+id, "$default", "", changed, false)))
+	if editing.StatusCode != 409 || backend.created != 0 {
+		t.Fatalf("edit during flush %d %s", editing.StatusCode, editing.Body)
+	}
+	if err := h.HandleFlushJob(ctx, jobs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if backend.created != 1 {
+		t.Fatalf("worker created %d", backend.created)
+	}
 	again, _ := h.Handle(ctx, withUser(httpEvent("POST", "/api/day/2026-10-02/finish", "$default", "", "", false)))
-	if again.StatusCode != 200 || backend.created != 1 || !strings.Contains(again.Body, `"flushed":0`) {
+	if again.StatusCode != 200 || backend.created != 1 || !strings.Contains(again.Body, `"status":"synced"`) || !strings.Contains(again.Body, `"flushed":0`) {
 		t.Fatalf("again %d created %d %s", again.StatusCode, backend.created, again.Body)
 	}
 	denied, _ := h.Handle(ctx, withUser(httpEvent("DELETE", "/api/logs/"+id, "$default", "", "", false)))

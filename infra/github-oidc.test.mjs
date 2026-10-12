@@ -55,6 +55,9 @@ describe("GitHub OIDC bootstrap", () => {
     );
     expect(boundary).toContain("log-group:/aws/lambda/kintore-memo-*-flush");
     expect(boundary).toContain("log-group:/aws/lambda/kintore-memo-*-flush:*");
+    expect(boundary).toContain("lambda:InvokeFunction");
+    expect(boundary).toContain("function:kintore-memo-*-flush");
+    expect(boundary).not.toContain('Resource: "*"');
 
     const groups = template.slice(template.indexOf("Sid: ApiLogGroups"), template.indexOf("Sid: HttpApiAccessLogDelivery"));
     expect(groups).toContain("log-group:/aws/lambda/kintore-memo-*-flush");

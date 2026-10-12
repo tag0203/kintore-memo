@@ -49,6 +49,8 @@ type Bootstrap struct {
 	Logs      map[string]LogPair `json:"logs"`
 	// DaySynced is true after this session date was flushed to Notion.
 	DaySynced bool `json:"daySynced,omitempty"`
+	// FlushStatus is open, flushing, synced, or failed for this session date.
+	FlushStatus string `json:"flushStatus,omitempty"`
 }
 
 // Window is the newest Notion page of logs, shared by bootstrap and the GETs.
