@@ -269,6 +269,8 @@ aws cloudformation describe-stacks \
 
 `kintore-memo-gha-deploy` のインラインポリシー合計が 10,240 バイトを超え、スタック `kintore-memo-github-oidc` の更新は IAM 409（`Maximum policy size of 10240 bytes exceeded for role kintore-memo-gha-deploy`）で失敗します。権限の追加も削除もしていません。同じステートメントを、上の 5 つのカスタマー管理ポリシーへ移しています。境界 `kintore-memo-api-permissions-boundary` の中身も変えていません。flush 関数 `kintore-memo-*-flush` の `logs:CreateLogGroup` は `kintore-memo-gha-deploy-logs-http` にあります。境界はこれまでどおり、そのロググループへの `logs:CreateLogStream` と `logs:PutLogEvents`、および `lambda:InvokeFunction` を許します。
 
+デプロイ済みスタックの `HttpApiStageTagPolicy` は `AWS::IAM::Policy`（インライン名 `HttpApiStageTags`）です。同じ論理 ID のまま `AWS::IAM::ManagedPolicy` にすると、変更セットの作成が `Update of resource type is not permitted` で止まります。論理 ID は `DeployHttpApiStageTagPolicy` です。CloudFormation は新しい管理ポリシーを作り、古いインラインポリシーを消します。管理ポリシー名 `kintore-memo-gha-deploy-http-api-tags` はインライン名 `HttpApiStageTags` と別なので、作成が削除より先でも名前は重なりません。ロール更新はインラインポリシーを大きくするのではなく外すので、更新の途中で 10,240 バイトの合計は増えません。他の論理 ID は型が変わっていません。
+
 この更新が終わる前の dev デプロイ（[run 38241587055](https://github.com/tag0203/kintore-memo/actions/runs/38241587055)）は、ロググループ `/aws/lambda/kintore-memo-dev-flush` の `logs:CreateLogGroup` が AccessDenied になります。アプリの `sam deploy` より先に、手元の管理者でこのスタックを更新します。Actions からは更新しません。リポジトリルートで、この変更を含むツリーを使います。
 
 ```bash

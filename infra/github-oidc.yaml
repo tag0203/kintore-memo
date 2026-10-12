@@ -169,7 +169,7 @@ Resources:
         - !Ref DeployLambdaIamPolicy
         - !Ref DeployLogsHttpApiPolicy
         - !Ref DeployDataEdgePolicy
-        - !Ref HttpApiStageTagPolicy
+        - !Ref DeployHttpApiStageTagPolicy
       Tags:
         - Key: Project
           Value: kintore-memo
@@ -559,7 +559,13 @@ Resources:
   # Separate managed policy so the cfn-lint 1.57.1 ignore (W3037) does not cover other
   # actions. That release's apigateway catalog omits these two names; the failed deploy
   # (run 38000076207) showed IAM enforcing apigateway:TagResource.
-  HttpApiStageTagPolicy:
+  # Logical ID is not HttpApiStageTagPolicy. The deployed stack still has that ID as
+  # AWS::IAM::Policy (inline name HttpApiStageTags), and CloudFormation rejects an
+  # in-place type change. This ID creates the managed policy, then the old inline
+  # policy is deleted. The managed name is not HttpApiStageTags, so create-before-delete
+  # does not collide. The role update removes inline policies instead of enlarging them,
+  # so the 10240-byte inline aggregate is not grown mid-update.
+  DeployHttpApiStageTagPolicy:
     Type: AWS::IAM::ManagedPolicy
     Metadata:
       cfn-lint:
