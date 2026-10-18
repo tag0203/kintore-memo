@@ -5,6 +5,7 @@ import {
   buildCreatePageBody,
   buildPreviousQuery,
   exerciseNamesFromSchema,
+  notionPageTitle,
   pageToLog,
   type NotionPropertySchema,
 } from "./notionMap";
@@ -60,8 +61,36 @@ describe("Notion payload mapping", () => {
 
     expect(body.parent).toEqual({ type: "data_source_id", data_source_id: "ds-1" });
     const properties = body.properties as Record<string, { title?: { text: { content: string } }[] }>;
-    expect(properties["名前"]?.title?.[0]?.text.content).toBe("－");
+    expect(properties["名前"]?.title?.[0]?.text.content).toBe("スクワット");
     expect(properties["きつさ"]).toEqual({ type: "select", select: { name: "きつい" } });
+    expect(notionPageTitle("ベンチプレス")).toBe("ベンチプレス");
+    expect(notionPageTitle("  スクワット  ")).toBe("スクワット");
+    expect(notionPageTitle("")).toBe("－");
+    expect(notionPageTitle("  ")).toBe("－");
+    expect(notionPageTitle("ベンチプレス / スクワット")).toBe("ベンチプレス / スクワット");
+    const bench = buildCreatePageBody("ds-1", "－", {
+      exercise: "ベンチプレス",
+      weightKg: 80,
+      reps: 8,
+      sets: 3,
+      difficulty: 4,
+      date: "2026-10-02",
+      title: "－",
+    });
+    const squat = buildCreatePageBody("ds-1", "－", {
+      exercise: "スクワット",
+      weightKg: 60,
+      reps: 10,
+      sets: 3,
+      difficulty: 3,
+      date: "2026-10-02",
+      title: "－",
+    });
+    const benchProps = bench.properties as Record<string, { title?: { text: { content: string } }[] }>;
+    const squatProps = squat.properties as Record<string, { title?: { text: { content: string } }[] }>;
+    expect(benchProps["－"]?.title?.[0]?.text.content).toBe("ベンチプレス");
+    expect(squatProps["－"]?.title?.[0]?.text.content).toBe("スクワット");
+
     expect(pageToLog(page, "名前")).toMatchObject({
       exercise: "スクワット",
       weightKg: 80,

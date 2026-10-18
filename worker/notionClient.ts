@@ -175,7 +175,7 @@ export function createNotionClient(env: NotionEnv, fetchImpl: typeof fetch = fet
         sets: input.sets,
         difficulty: input.difficulty,
         date: input.date,
-        title: input.title?.trim() || PAGE_TITLE,
+        title: exercise.trim() || PAGE_TITLE,
         createdAt: page.created_time ?? new Date().toISOString(),
       };
     },

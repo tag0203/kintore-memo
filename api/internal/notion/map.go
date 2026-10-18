@@ -4,7 +4,10 @@ package notion
 import "github.com/tag0203/kintore-memo/api/internal/model"
 
 const (
-	version        = "2026-03-11"
+	version = "2026-03-11"
+	// pageTitle fills a workout page only when 種目 is blank.
+	// The live database also uses this character as the title property name.
+	// A normal row's title value is the exercise name, not this placeholder.
 	pageTitle      = "－"
 	recentPageSize = 100
 	dayPageSize    = 100
@@ -145,11 +148,22 @@ func buildDraftIDQuery(draftID string) map[string]any {
 	}
 }
 
-func buildCreatePageBody(dataSourceID, titleProperty string, input model.NewExerciseLog) map[string]any {
-	title := trim(input.Title)
-	if title == "" {
-		title = pageTitle
+// notionPageTitle is the title property value for one workout page.
+// A page stores one 種目 select, so the title is that exercise name.
+// Several exercises are several pages; this does not join them.
+// The property may be named "－"; this function does not rename it.
+// A blank name uses "－" so the page is not saved with an empty title.
+func notionPageTitle(exercise string) string {
+	name := trim(exercise)
+	if name == "" {
+		return pageTitle
 	}
+	return name
+}
+
+func buildCreatePageBody(dataSourceID, titleProperty string, input model.NewExerciseLog) map[string]any {
+	exercise := trim(input.Exercise)
+	title := notionPageTitle(exercise)
 	return map[string]any{
 		"parent": map[string]any{"type": "data_source_id", "data_source_id": dataSourceID},
 		"properties": map[string]any{
@@ -157,7 +171,7 @@ func buildCreatePageBody(dataSourceID, titleProperty string, input model.NewExer
 				"type":  "title",
 				"title": []any{map[string]any{"type": "text", "text": map[string]any{"content": title}}},
 			},
-			properties.Exercise:   map[string]any{"type": "select", "select": map[string]any{"name": input.Exercise}},
+			properties.Exercise:   map[string]any{"type": "select", "select": map[string]any{"name": exercise}},
 			properties.Weight:     map[string]any{"type": "number", "number": input.WeightKg},
 			properties.Reps:       map[string]any{"type": "number", "number": input.Reps},
 			properties.Sets:       map[string]any{"type": "number", "number": input.Sets},
