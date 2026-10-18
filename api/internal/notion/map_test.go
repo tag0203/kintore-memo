@@ -6,6 +6,115 @@ import (
 	"github.com/tag0203/kintore-memo/api/internal/model"
 )
 
+func TestNotionPageTitle(t *testing.T) {
+	t.Run("single exercise", func(t *testing.T) {
+		if got := notionPageTitle("ベンチプレス"); got != "ベンチプレス" {
+			t.Fatalf("title = %q", got)
+		}
+		body := buildCreatePageBody("ds-1", "－", model.NewExerciseLog{
+			Exercise: "ベンチプレス", WeightKg: 80, Reps: 8, Sets: 3, Difficulty: 4, Date: "2026-10-02",
+			Title: "－",
+		})
+		props := body["properties"].(map[string]any)
+		if _, renamed := props["名前"]; renamed {
+			t.Fatal("title property was renamed")
+		}
+		content := titleContent(t, props, "－")
+		if content != "ベンチプレス" {
+			t.Fatalf("content = %q", content)
+		}
+		selectName := props["種目"].(map[string]any)["select"].(map[string]any)["name"]
+		if selectName != "ベンチプレス" {
+			t.Fatalf("select = %#v", selectName)
+		}
+		// A custom draft title does not replace the exercise name.
+		custom := buildCreatePageBody("ds-1", "－", model.NewExerciseLog{
+			Exercise: "デッドリフト", Title: "メモ", WeightKg: 100, Reps: 5, Sets: 3, Difficulty: 5, Date: "2026-10-02",
+		})
+		if got := titleContent(t, custom["properties"].(map[string]any), "－"); got != "デッドリフト" {
+			t.Fatalf("custom title leaked: %q", got)
+		}
+	})
+
+	t.Run("multiple exercises stay one title per row", func(t *testing.T) {
+		// 種目 is a single select, so two exercises are two pages.
+		// Titles are not joined with " / ".
+		want := []string{"ベンチプレス", "スクワット"}
+		for _, exercise := range want {
+			body := buildCreatePageBody("ds-1", "－", model.NewExerciseLog{
+				Exercise: exercise, WeightKg: 60, Reps: 10, Sets: 3, Difficulty: 3, Date: "2026-10-02",
+				Title: "－",
+			})
+			props := body["properties"].(map[string]any)
+			if got := titleContent(t, props, "－"); got != exercise {
+				t.Fatalf("title for %s = %q", exercise, got)
+			}
+		}
+		// A single 種目 whose text contains a slash is copied whole.
+		slash := notionPageTitle("ベンチプレス / スクワット")
+		if slash != "ベンチプレス / スクワット" {
+			t.Fatalf("slash name = %q", slash)
+		}
+	})
+
+	t.Run("empty and odd names", func(t *testing.T) {
+		cases := []struct {
+			in, want string
+		}{
+			{in: "", want: "－"},
+			{in: "   ", want: "－"},
+			{in: "\n\t", want: "－"},
+			{in: "\u3000\u3000", want: "－"},
+			{in: "  ベンチプレス  ", want: "ベンチプレス"},
+			{in: "\u3000スクワット", want: "スクワット"},
+			{in: "スクワット\n", want: "スクワット"},
+			{in: "－", want: "－"},
+			{in: "-", want: "-"},
+			{in: "  －  ", want: "－"},
+			{in: "ベンチ　プレス", want: "ベンチ　プレス"},
+		}
+		for _, tc := range cases {
+			if got := notionPageTitle(tc.in); got != tc.want {
+				t.Fatalf("notionPageTitle(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		}
+		body := buildCreatePageBody("ds-1", "－", model.NewExerciseLog{
+			Exercise: "  スクワット  ", Title: "－", WeightKg: 80, Reps: 8, Sets: 3, Difficulty: 4, Date: "2026-10-02",
+		})
+		props := body["properties"].(map[string]any)
+		if got := titleContent(t, props, "－"); got != "スクワット" {
+			t.Fatalf("padded exercise title = %q", got)
+		}
+		if props["種目"].(map[string]any)["select"].(map[string]any)["name"] != "スクワット" {
+			t.Fatalf("select was not trimmed: %#v", props["種目"])
+		}
+		blank := buildCreatePageBody("ds-1", "－", model.NewExerciseLog{
+			Exercise: "  ", Title: "", WeightKg: 80, Reps: 8, Sets: 3, Difficulty: 4, Date: "2026-10-02",
+		})
+		if got := titleContent(t, blank["properties"].(map[string]any), "－"); got != "－" {
+			t.Fatalf("blank exercise title = %q", got)
+		}
+	})
+}
+
+func titleContent(t *testing.T, props map[string]any, property string) string {
+	t.Helper()
+	titleProp, ok := props[property].(map[string]any)
+	if !ok {
+		t.Fatalf("missing title property %q in %#v", property, props)
+	}
+	items, ok := titleProp["title"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("title items = %#v", titleProp["title"])
+	}
+	text, ok := items[0].(map[string]any)["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("title text = %#v", items[0])
+	}
+	content, _ := text["content"].(string)
+	return content
+}
+
 func TestWorkoutSchemaAndPage(t *testing.T) {
 	schema := map[string]any{
 		"名前": map[string]any{"type": "title"},
@@ -63,7 +172,7 @@ func TestWorkoutSchemaAndPage(t *testing.T) {
 	}
 	props := body["properties"].(map[string]any)
 	titleProp := props["名前"].(map[string]any)["title"].([]any)[0].(map[string]any)
-	if titleProp["text"].(map[string]any)["content"] != "－" {
+	if titleProp["text"].(map[string]any)["content"] != "スクワット" {
 		t.Fatal(titleProp)
 	}
 	if props["きつさ"].(map[string]any)["select"].(map[string]any)["name"] != "きつい" {

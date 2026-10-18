@@ -105,12 +105,19 @@ export function buildRecentQuery() {
   };
 }
 
+/** Title value for one workout page. One page stores one 種目, so this is that name. */
+export function notionPageTitle(exercise: string): string {
+  const name = exercise.trim();
+  return name || PAGE_TITLE;
+}
+
 export function buildCreatePageBody(
   dataSourceId: string,
   titleProperty: string,
   input: NewExerciseLog,
 ): Record<string, unknown> {
-  const title = input.title?.trim() || PAGE_TITLE;
+  const exercise = input.exercise.trim();
+  const title = notionPageTitle(exercise);
   return {
     parent: { type: "data_source_id", data_source_id: dataSourceId },
     properties: {
@@ -118,7 +125,7 @@ export function buildCreatePageBody(
         type: "title",
         title: [{ type: "text", text: { content: title } }],
       },
-      [PROPERTIES.exercise]: { type: "select", select: { name: input.exercise } },
+      [PROPERTIES.exercise]: { type: "select", select: { name: exercise } },
       [PROPERTIES.weight]: { type: "number", number: input.weightKg },
       [PROPERTIES.reps]: { type: "number", number: input.reps },
       [PROPERTIES.sets]: { type: "number", number: input.sets },

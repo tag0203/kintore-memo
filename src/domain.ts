@@ -9,7 +9,7 @@ export interface ExerciseLog {
   difficulty: Difficulty;
   /** YYYY-MM-DD */
   date: string;
-  /** Notion のタイトル。記録行では「－」を入れる。 */
+  /** 下書きは「－」。Notion の行はページタイトル（種目名）。 */
   title: string;
   createdAt: string;
   /**
@@ -43,7 +43,7 @@ export const DIFFICULTY_LABELS: Record<Difficulty, string> = {
 
 export const DIFFICULTIES: readonly Difficulty[] = [1, 2, 3, 4, 5];
 
-/** Notion のページタイトルに入れる全角ハイフン。 */
+/** 下書き JSON の title。Notion のページタイトルは種目名で、この文字は種目名が空のときの予備。 */
 export const PAGE_TITLE = "－";
 
 export function isDifficulty(value: number): value is Difficulty {

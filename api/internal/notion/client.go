@@ -370,10 +370,7 @@ func logFromCreatedPage(page map[string]any, titleProperty string, input model.N
 	if log := PageToLog(page, titleProperty); log != nil && log.ID != "" {
 		return *log
 	}
-	title := trim(input.Title)
-	if title == "" {
-		title = pageTitle
-	}
+	title := notionPageTitle(input.Exercise)
 	created, _ := page["created_time"].(string)
 	if created == "" {
 		created = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
