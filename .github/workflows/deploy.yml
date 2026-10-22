@@ -278,7 +278,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
+          # Newest 1.26 patch. check-latest skips a stale runner toolcache match.
           go-version: "1.26"
+          check-latest: true
           cache-dependency-path: api/go.sum
 
       - name: Setup SAM CLI
