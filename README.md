@@ -27,7 +27,7 @@ npm run dev
 | --- | --- |
 | `npm run dev` | 開発サーバ |
 | `npm test` | 単体テストと、フロントにシークレットが無いことの確認 |
-| `npm run test:api` | Go API（`api/`）の単体テスト。Go 1.26 が要る |
+| `npm run test:api` | Go API（`api/`）の単体テスト。Go 1.26.10 以上の 1.26 系が要る（CVE-2026-111943） |
 | `npm run typecheck` | 画面・設定・Worker の型チェック |
 | `npm run build` | 静的ファイルを `dist/` へ出力（PWA のマニフェストと Service Worker を含む） |
 | `npm run preview` | ビルド結果を <http://localhost:4173> で確認 |

@@ -25,7 +25,7 @@ IaC は **AWS SAM** です（CDK にはしていません）。テンプレー�
 - AWS CLI v2（デプロイするアカウントにサインイン済み）
 - [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
 - Docker（`sam local` 用）
-- Go 1.26（`sam build` が `api/` を `bootstrap` にコンパイルする。Lambda は `provided.al2023` / arm64）
+- Go 1.26.10 以上の 1.26 系（CVE-2026-111943。`sam build` が `api/` を `bootstrap` にコンパイルする。Lambda は `provided.al2023` / arm64）
 - Node.js 22（ローカルの SPA。Lambda ランタイムではない）
 
 リージョンの既定は `ap-northeast-1` です（`infra/samconfig.toml`）。
