@@ -8,7 +8,8 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 
 | ファイル | いつ動くか | 内容 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26.10 以上の 1.26 系。CVE-2026-111943）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
+| `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26.10 以上の 1.26 系。CVE-2026-111943）、`govulncheck -scan symbol ./...`（`api/`。到達する既知の脆弱性で失敗）、`npm audit --omit=dev`（警告のみ。失敗にしない）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
+| `.github/dependabot.yml` | 週次 | Go modules（`api/`）、npm、GitHub Actions。Actions はコミット SHA 固定なので、その SHA と版のコメントを更新する |
 | `.github/workflows/deploy.yml` | `main` への push で CI が成功したあと（自動は `dev` だけ）。Actions タブからの手動実行（`dev` / `staging` / `prod`） | Secret `AWS_DEPLOY_ROLE_ARN` が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
@@ -25,7 +26,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 - `head_repository` の full name と id が、実行中のリポジトリかつ id `1389679197` と一致すること。fork の head は拒否する
 - デプロイ先は `dev` 固定。`staging` / `prod` は手動の `workflow_dispatch` だけ
 
-`test` workflow（`test.yml`）は待ちません。中身は `npm test`、`go test`、Lambda バイナリのコンパイルで、CI の app ジョブがそれに加えて型チェック、ビルド、`check:secrets`、SAM の validate / build を実行します。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、両方を書くと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
+`test` workflow（`test.yml`）は待ちません。中身は `npm test`、`go test`、Lambda バイナリのコンパイルで、CI の app ジョブがそれに加えて型チェック、ビルド、`check:secrets`、SAM の validate / build を実行します。脆弱性は別ジョブで、`govulncheck`（到達するコードの既知の脆弱性で失敗）と `npm audit --omit=dev`（警告のみ）です。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、両方を書くと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
 
 checkout するコミットは `github.event.workflow_run.head_sha` です。`workflow_run` の `github.sha` はデフォルトブランチの先端であり、テストしたコミットとは限りません。
 
@@ -49,7 +50,7 @@ gate の checkout は `fetch-depth: 0` でも、この run がキューに入っ
 
 この変数は自動実行だけを止めます。Actions タブからの手動 Deploy は今までどおりです。workflow 全体を無効にすると手動実行も止まるので、一時停止には使いません。再開するときは変数を `true` にするか、削除します。
 
-本番 API は Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。CI は `go test` と、そのバイナリを対象にした `sam build` を実行します。Cloudflare DNS（[#13](https://github.com/tag0203/kintore-memo/issues/13)）はこのワークフローの対象外です。
+本番 API は Go の `api/`（[#23](https://github.com/tag0203/kintore-memo/issues/23)）です。CI は `go test`、`govulncheck`、そのバイナリを対象にした `sam build` を実行します。Cloudflare DNS（[#13](https://github.com/tag0203/kintore-memo/issues/13)）はこのワークフローの対象外です。
 
 ## Deploy ジョブの分離
 

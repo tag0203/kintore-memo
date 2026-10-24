@@ -113,7 +113,7 @@ docs/aws-deploy.md
 docs/aws-auth.md        Cognito ユーザー作成とログイン（#9）
 docs/dynamodb.md        単一テーブル（#11）
 docs/github-actions-oidc.md
-.github/workflows/      CI と OIDC デプロイ（#14。main の CI 成功後に dev）。Go のテストと sam build を含む
+.github/workflows/      CI と OIDC デプロイ（#14。main の CI 成功後に dev）。Go のテスト、govulncheck、sam build を含む
 ```
 
 ## Notion と DynamoDB

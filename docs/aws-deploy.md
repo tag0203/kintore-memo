@@ -239,7 +239,7 @@ S3 にオブジェクトが残っているとバケット削除に失敗する�
 
 ## GitHub Actions
 
-CI は pull request と `main` で毎回、テスト、型チェック、ビルド、`check:secrets`、`sam validate --lint`、`sam build` を実行します。AWS アカウントは要りません。
+CI は pull request と `main` で毎回、テスト、型チェック、ビルド、`check:secrets`、`govulncheck`（到達する既知の脆弱性で失敗）、`npm audit --omit=dev`（警告のみ）、`sam validate --lint`、`sam build` を実行します。AWS アカウントは要りません。
 
 `main` への push でその CI が成功すると、OIDC で `dev` に `sam deploy` し、S3 / CloudFront へ公開します。checkout するのは CI がテストしたコミットです。`staging` と `prod` は Actions の Deploy を手動実行します。ロール ARN の Secret `AWS_DEPLOY_ROLE_ARN` が空の間は、自動も手動も成功のまま何もしません。アクセスキーは使いません。
 
