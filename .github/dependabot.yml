@@ -1,0 +1,19 @@
+# Weekly dependency updates. GitHub Actions are pinned to commit SHAs in the
+# workflows. The github-actions ecosystem updates those SHAs and the version
+# comments next to them (for example "# v5").
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /api
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
