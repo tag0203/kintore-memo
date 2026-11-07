@@ -363,7 +363,7 @@ jobs:
           persist-credentials: false
 
       - name: Download SAM build artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sam-build
           path: /tmp
@@ -626,7 +626,7 @@ jobs:
           cache: npm
 
       - name: Download SPA publish inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: spa-publish-env
           path: /tmp/spa-publish
@@ -713,13 +713,13 @@ jobs:
           fi
 
       - name: Download SPA publish inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: spa-publish-env
           path: /tmp/spa-publish
 
       - name: Download SPA dist
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: spa-dist
           path: dist/
