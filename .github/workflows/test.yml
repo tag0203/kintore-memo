@@ -4,7 +4,10 @@
 name: test
 
 on:
+  # Same split as ci.yml. Dev deploy waits on CI, not on this workflow.
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:

@@ -1,19 +1,49 @@
 # Weekly dependency updates. GitHub Actions are pinned to commit SHAs in the
 # workflows. The github-actions ecosystem updates those SHAs and the version
 # comments next to them (for example "# v5").
+#
+# Groups are minor and patch version updates only. A major update stays in its
+# own pull request. Security updates are not grouped (applies-to defaults to
+# version-updates).
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /api
     schedule:
       interval: weekly
+    groups:
+      # The v2 module and its submodules. Not aws-lambda-go or smithy-go.
+      # The group id cannot end in a digit, so the name does not include "v2".
+      aws-sdk-go:
+        patterns:
+          - "github.com/aws/aws-sdk-go-v2*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # react and react-dom must move together. A one-sided bump fails CI.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
