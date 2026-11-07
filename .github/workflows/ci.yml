@@ -1,7 +1,8 @@
 # CI runs on pull requests and on pushes to main. It does not deploy and does
 # not use AWS credentials.
 # Deploy is .github/workflows/deploy.yml. A successful push to main deploys dev
-# after this workflow. CI is the superset of test.yml, so deploy waits on CI only.
+# after this workflow. The app job runs npm test, go test, and the arm64 compile
+# that used to live in test.yml, so deploy waits on CI only.
 # Action versions are pinned to full commit SHAs (mutable tags are not trusted).
 # The vuln job is separate so it runs beside test and SAM. govulncheck fails the
 # workflow on a reachable vulnerability. npm audit only warns.
