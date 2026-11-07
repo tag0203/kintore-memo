@@ -26,7 +26,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 - `head_repository` の full name と id が、実行中のリポジトリかつ id `1389679197` と一致すること。fork の head は拒否する
 - デプロイ先は `dev` 固定。`staging` / `prod` は手動の `workflow_dispatch` だけ
 
-`test` workflow（`test.yml`）は待ちません。中身は `npm test`、`go test`、Lambda バイナリのコンパイルで、CI の app ジョブがそれに加えて型チェック、ビルド、`check:secrets`、SAM の validate / build を実行します。脆弱性は別ジョブで、`govulncheck`（到達するコードの既知の脆弱性で失敗）と `npm audit --omit=dev`（警告のみ）です。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、両方を書くと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
+重複していた `test` workflow（`test.yml`）は削除済みです。`npm test`、`go test`、Lambda バイナリのコンパイルは CI の app ジョブが実行し、同じジョブで型チェック、ビルド、`check:secrets`、CSP の smoke も走ります。SAM の validate / build と脆弱性（`govulncheck` は到達する既知の脆弱性で失敗、`npm audit --omit=dev` は警告のみ）は別ジョブです。`workflow_run` は列挙した workflow のどれか一つが完了すると起動するので、テスト用の workflow を足すと片方が成功しただけでデプロイします。完了順のずれを API で突き合わせる方式は使っていません。
 
 checkout するコミットは `github.event.workflow_run.head_sha` です。`workflow_run` の `github.sha` はデフォルトブランチの先端であり、テストしたコミットとは限りません。
 
