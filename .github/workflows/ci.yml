@@ -1,4 +1,5 @@
-# CI always runs. It does not deploy and does not use AWS credentials.
+# CI runs on pull requests and on pushes to main. It does not deploy and does
+# not use AWS credentials.
 # Deploy is .github/workflows/deploy.yml. A successful push to main deploys dev
 # after this workflow. CI is the superset of test.yml, so deploy waits on CI only.
 # Action versions are pinned to full commit SHAs (mutable tags are not trusted).
@@ -9,7 +10,12 @@ name: CI
 
 on:
   pull_request:
+  # Feature and Dependabot branches are checked on pull_request only. A push
+  # trigger there runs the same jobs a second time. main stays on push so a
+  # merge still runs CI, which deploy.yml waits on (workflow_run, event push).
   push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
