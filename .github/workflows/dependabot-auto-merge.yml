@@ -1,0 +1,127 @@
+# Enable auto-merge on Dependabot pull requests that are semver patch or minor.
+# Major updates stay for review. This file does not merge by itself: GitHub
+# merges only after branch rules pass. With no required status checks, auto-merge
+# merges as soon as it is enabled, so main must require the CI jobs first.
+#
+# pull_request, not pull_request_target. The job does not checkout the PR.
+# Dependabot-triggered runs get a read-only GITHUB_TOKEN unless permissions are
+# declared. Job permissions below are the ones `gh pr merge --auto` needs:
+# contents: write to merge, pull-requests: write to enable auto-merge.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions-for-workflow-runs-triggered-by-dependabot
+
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  auto-merge:
+    name: Auto-merge patch and minor updates
+    if: github.actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+
+      # update-type is the highest semver level in the PR. fetch-metadata v3.1.0
+      # orders version-update:semver-major, then minor, then patch
+      # (src/dependabot/output.ts maxSemver). A group that contains any major
+      # is semver-major and does not enter this step.
+      # 0.x is still a minor when only the second component changes
+      # (calculateUpdateType compares the first component for major). Those
+      # bumps are refused below from updated-dependencies-json.
+      - name: Enable auto-merge for patch and minor updates
+        if: steps.metadata.outputs.update-type == 'version-update:semver-patch' || steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+          UPDATED_DEPENDENCIES_JSON: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'EOF'
+          import { spawnSync } from "node:child_process";
+
+          const patch = "version-update:semver-patch";
+          const minor = "version-update:semver-minor";
+          const major = "version-update:semver-major";
+          const allowed = new Set([patch, minor]);
+
+          function leave(reason) {
+            console.log(reason);
+            process.exit(0);
+          }
+
+          function numericParts(version) {
+            if (typeof version !== "string") return null;
+            const match = version
+              .trim()
+              .replace(/^v/i, "")
+              .match(/^(\d+)\.(\d+)(?:\.(\d+))?/);
+            if (!match) return null;
+            return { major: Number(match[1]), minor: Number(match[2]) };
+          }
+
+          const updateType = process.env.UPDATE_TYPE ?? "";
+          if (!allowed.has(updateType)) {
+            leave("Leaving the pull request. Update type is not patch or minor.");
+          }
+
+          let updates;
+          try {
+            updates = JSON.parse(process.env.UPDATED_DEPENDENCIES_JSON ?? "");
+          } catch {
+            leave("Leaving the pull request. Dependency metadata is not JSON.");
+          }
+          if (!Array.isArray(updates) || updates.length === 0) {
+            leave("Leaving the pull request. Dependency metadata is empty.");
+          }
+
+          for (const dep of updates) {
+            const name =
+              dep && typeof dep.dependencyName === "string" ? dep.dependencyName : "dependency";
+            const depType = dep && typeof dep.updateType === "string" ? dep.updateType : "";
+            if (depType === major) {
+              leave(`Leaving the pull request. ${name} is a major update.`);
+            }
+            if (depType !== "" && !allowed.has(depType)) {
+              leave(`Leaving the pull request. ${name} has an unexpected update type.`);
+            }
+            const prev = numericParts(dep && dep.prevVersion);
+            const next = numericParts(dep && dep.newVersion);
+            if (!prev || !next) {
+              leave(`Leaving the pull request. Versions for ${name} are not major.minor.`);
+            }
+            if (prev.major === 0 && (next.major !== prev.major || next.minor !== prev.minor)) {
+              leave(
+                `Leaving the pull request. ${name} is a 0.x bump (${dep.prevVersion} -> ${dep.newVersion}).`,
+              );
+            }
+          }
+
+          if (!process.env.GH_TOKEN) {
+            console.log("GH_TOKEN is empty. Refusing to enable auto-merge.");
+            process.exit(1);
+          }
+          const prUrl = process.env.PR_URL ?? "";
+          if (!/^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+$/.test(prUrl)) {
+            console.log("Pull request URL is not a GitHub pull request. Refusing to enable auto-merge.");
+            process.exit(1);
+          }
+
+          console.log("Enabling squash auto-merge for a patch or minor update.");
+          const result = spawnSync("gh", ["pr", "merge", "--auto", "--squash", prUrl], {
+            stdio: "inherit",
+            env: process.env,
+          });
+          process.exit(result.status === null ? 1 : result.status);
+          EOF
