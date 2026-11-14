@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.42.4
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.88.5
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.59.0
-	github.com/aws/smithy-go v1.24.2
+	github.com/aws/smithy-go v1.28.9
 )
 
 require (
