@@ -8,6 +8,17 @@
 # declared. Job permissions below are the ones `gh pr merge --auto` needs:
 # contents: write to merge, pull-requests: write to enable auto-merge.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions-for-workflow-runs-triggered-by-dependabot
+#
+# The merge actor is GITHUB_TOKEN. Push events from that token do not start
+# workflow runs (workflow_dispatch and repository_dispatch are the exceptions
+# that matter here; push is not). ci.yml therefore does not run on the squash
+# commit, and deploy.yml does not auto-deploy dev: its workflow_run gate
+# requires a successful CI run whose event is push. The update reaches dev on
+# the next non-GITHUB_TOKEN push to main that runs CI, or on a manual Deploy
+# of dev. A GitHub App or PAT is not used. This job is specified to call
+# gh with GITHUB_TOKEN, and a Dependabot-triggered run cannot read ordinary
+# Actions secrets.
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow
 
 name: Dependabot auto-merge
 
