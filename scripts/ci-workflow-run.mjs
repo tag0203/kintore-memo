@@ -36,8 +36,16 @@ export function parseWorkflowRunPath(path) {
   return null;
 }
 
+const ACTIONS_BOT = "github-actions[bot]";
+
 /**
- * True only for a successful push of this repository's CI workflow on main.
+ * True for CI on main that may deploy dev.
+ * A push is the human or bot path that GitHub starts itself.
+ * workflow_dispatch counts only when github-actions[bot] started it and the
+ * head branch is main. That is the post-merge CI for a GITHUB_TOKEN squash:
+ * the token cannot start a push workflow, but it can start workflow_dispatch.
+ * A person running CI from the Actions tab does not match the actor, so that
+ * run does not deploy. pull_request CI does not deploy.
  * `headRepository` must be this repo, not a fork.
  * @param {{
  *   name?: string,
@@ -45,6 +53,7 @@ export function parseWorkflowRunPath(path) {
  *   workflowId?: string | number,
  *   headBranch?: string,
  *   event?: string,
+ *   actor?: string,
  *   conclusion?: string,
  *   headRepository?: string,
  *   headRepositoryId?: string | number,
@@ -55,7 +64,11 @@ export function parseWorkflowRunPath(path) {
  */
 export function isThisRepoCiPushOnMain(input) {
   if (input.conclusion !== "success") return { ok: false, reason: "CI did not succeed" };
-  if (input.event !== "push") return { ok: false, reason: "triggering event is not push" };
+  const push = input.event === "push";
+  const dispatched = input.event === "workflow_dispatch" && input.actor === ACTIONS_BOT;
+  if (!push && !dispatched) {
+    return { ok: false, reason: "triggering event is not push or a github-actions workflow_dispatch" };
+  }
   if (input.headBranch !== "main") return { ok: false, reason: "head branch is not main" };
   if (input.name !== CI_WORKFLOW_NAME) return { ok: false, reason: "workflow name is not CI" };
   if (Number(input.workflowId) !== CI_WORKFLOW_ID) {
@@ -83,6 +96,7 @@ function fromEnv() {
     workflowId: process.env.TRIGGER_WORKFLOW_ID,
     headBranch: process.env.HEAD_BRANCH,
     event: process.env.TRIGGER_EVENT,
+    actor: process.env.TRIGGER_ACTOR,
     conclusion: process.env.TRIGGER_CONCLUSION,
     headRepository: process.env.HEAD_REPOSITORY,
     headRepositoryId: process.env.HEAD_REPOSITORY_ID,

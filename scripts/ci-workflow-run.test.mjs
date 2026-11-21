@@ -76,6 +76,15 @@ describe("isThisRepoCiPushOnMain", () => {
     expect(isThisRepoCiPushOnMain({ ...trusted, name: "test", workflowId: 372807335 }).ok).toBe(false);
     expect(isThisRepoCiPushOnMain({ ...trusted, path: ".github/workflows/ci.yml@feature" }).ok).toBe(false);
     expect(isThisRepoCiPushOnMain({ ...trusted, event: "pull_request" }).ok).toBe(false);
+    expect(isThisRepoCiPushOnMain({ ...trusted, event: "workflow_dispatch", actor: "tag0203" }).ok).toBe(false);
+    expect(isThisRepoCiPushOnMain({ ...trusted, event: "workflow_dispatch" }).ok).toBe(false);
+    expect(
+      isThisRepoCiPushOnMain({ ...trusted, event: "workflow_dispatch", actor: "github-actions[bot]", headBranch: "feature" })
+        .ok,
+    ).toBe(false);
+    expect(
+      isThisRepoCiPushOnMain({ ...trusted, event: "workflow_dispatch", actor: "github-actions[bot]" }).ok,
+    ).toBe(true);
     expect(isThisRepoCiPushOnMain({ ...trusted, conclusion: "failure" }).ok).toBe(false);
     expect(isThisRepoCiPushOnMain({ ...trusted, headBranch: "feature" }).ok).toBe(false);
     expect(isThisRepoCiPushOnMain({ ...trusted, repositoryId: 1, headRepositoryId: 1 }).ok).toBe(false);

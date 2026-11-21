@@ -13,18 +13,30 @@ on:
   pull_request:
   # Feature and Dependabot branches are checked on pull_request only. A push
   # trigger there runs the same jobs a second time. main stays on push so a
-  # merge still runs CI, which deploy.yml waits on (workflow_run, event push).
+  # merge still runs CI, which deploy.yml waits on.
+  # workflow_dispatch head_sha is set by the Dependabot post-merge job. When
+  # github-actions[bot] starts that run, the SHA must be the commit GitHub
+  # checked out. A person can still run CI by hand and leave the input empty;
+  # that run does not deploy.
   push:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Commit on main that this run must check out. Leave empty for a manual run.
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+# Cancel only the previous pull_request run. main's ref is refs/heads/main for
+# every push, so cancel-in-progress there drops CI for the earlier commit and
+# that commit never deploys. Each main SHA keeps its own run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   app:
@@ -32,6 +44,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Pin github-actions workflow_dispatch to the checked-out commit
+        if: github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]'
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${HEAD_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "Refusing workflow_dispatch: head_sha does not match the checked-out commit."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,6 +111,17 @@ jobs:
       SAM_CLI_TELEMETRY: "0"
       AWS_EC2_METADATA_DISABLED: "true"
     steps:
+      - name: Pin github-actions workflow_dispatch to the checked-out commit
+        if: github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]'
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${HEAD_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "Refusing workflow_dispatch: head_sha does not match the checked-out commit."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -163,6 +197,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Pin github-actions workflow_dispatch to the checked-out commit
+        if: github.event_name == 'workflow_dispatch' && github.actor == 'github-actions[bot]'
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "${HEAD_SHA}" != "${GITHUB_SHA}" ]; then
+            echo "Refusing workflow_dispatch: head_sha does not match the checked-out commit."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
