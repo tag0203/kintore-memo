@@ -42,6 +42,18 @@ describe("selectPushCiConclusion", () => {
     expect(selectPushCiConclusion([run(4, { conclusion: "cancelled" })], SHA)).toBe("failure");
     expect(selectPushCiConclusion([], SHA)).toBe("unknown");
     expect(selectPushCiConclusion([run(4, { status: "completed", conclusion: null })], SHA)).toBe("unknown");
+    expect(
+      selectPushCiConclusion(
+        [run(4, { event: "workflow_dispatch", triggering_actor: { login: "github-actions[bot]" } })],
+        SHA,
+      ),
+    ).toBe("success");
+    expect(
+      selectPushCiConclusion(
+        [run(4, { event: "workflow_dispatch", triggering_actor: { login: "tag0203" } })],
+        SHA,
+      ),
+    ).toBe("unknown");
   });
 });
 

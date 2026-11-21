@@ -10,7 +10,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26.10 以上の 1.26 系。CVE-2026-111943）、`govulncheck -scan symbol ./...`（`api/`。到達する既知の脆弱性で失敗）、`npm audit --omit=dev`（警告のみ。失敗にしない）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
 | `.github/dependabot.yml` | 週次 | Go modules（`api/`）、npm、GitHub Actions。Actions はコミット SHA 固定なので、その SHA と版のコメントを更新する |
-| `.github/workflows/deploy.yml` | `main` への push で CI が成功したあと（自動は `dev` だけ）。Actions タブからの手動実行（`dev` / `staging` / `prod`） | Secret `AWS_DEPLOY_ROLE_ARN` が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
+| `.github/workflows/deploy.yml` | `main` への push、または `github-actions[bot]` による `main` の CI `workflow_dispatch` が成功したあと（自動は `dev` だけ）。Actions タブからの Deploy の手動実行（`dev` / `staging` / `prod`） | Secret `AWS_DEPLOY_ROLE_ARN` が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
 
@@ -19,7 +19,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 `deploy.yml` は CI（`.github/workflows/ci.yml` の `name: CI`）が完了した `workflow_run` でも動きます。条件は次のとおりです。
 
 - 対象ブランチは `main`
-- 起動元イベントは `push`（pull request や CI の手動実行ではデプロイしない）
+- 起動元イベントは `push`、または `github-actions[bot]` が `main` に対して行った CI の `workflow_dispatch`。pull request の CI と、人が Actions タブから実行した CI ではデプロイしない。`workflow_dispatch` は Dependabot を `GITHUB_TOKEN` で squash したあとの経路で、そのトークンは `push` の workflow を起動できない。dispatch の `ref` はブランチ `main` だけで、入力 `head_sha` がそのとき読んだ `main` の SHA と一致しない run は CI が失敗する
 - `github.event.workflow_run.conclusion == 'success'`
 - 起動元の workflow 名は `CI`、workflow id は `372805829`（このリポジトリの `.github/workflows/ci.yml`）
 - `path` は `.github/workflows/ci.yml`、またはその後ろに `@main` / `@refs/heads/main` / `@<40桁の sha>` が付いた形。Workflow Run の REST 例は `.github/workflows/build.yml@main` で、このリポジトリの現行レスポンスは接尾辞なし。ファイル部分と ref を分けて見る
@@ -40,7 +40,7 @@ gate の checkout は `fetch-depth: 0` でも、この run がキューに入っ
 
 - その範囲の変更が `docs/` 以下（ディレクトリ名は大文字小文字を区別する）と、拡張子 `.md` / `.markdown`（拡張子は区別しない）だけ、または差分が空なら、自動デプロイしません。ドキュメントだけの push でも CI 自体は動きます
 - 成功記録が無い、API が読めない、SHA がリポジトリに無い、テストした SHA の祖先でないときは、範囲が分からないので tip をデプロイします
-- テストしたコミットより新しいアプリケーションコミットが、すでに `dev` に載っているとき、またはそのコミット自身の push CI が成功しているときは、古い SHA をデプロイしません。成功した新しい方のデプロイが新しい木を出すためです。新しいコミットの CI が失敗、実行中、または不明なときは、失敗した CI はデプロイを起動しないので、テスト済みの古い SHA をデプロイします
+- テストしたコミットより新しいアプリケーションコミットが、すでに `dev` に載っているとき、またはそのコミット自身の CI（`push`、または `github-actions[bot]` の `workflow_dispatch`）が成功しているときは、古い SHA をデプロイしません。成功した新しい方のデプロイが新しい木を出すためです。新しいコミットの CI が失敗、実行中、または不明なときは、失敗した CI はデプロイを起動しないので、テスト済みの古い SHA をデプロイします
 - 新しいコミットがドキュメントだけなら、テスト済みのアプリケーション SHA をデプロイします。そのドキュメントコミットの run が先に実行された場合も、最後の成功デプロイ以降にアプリケーション変更があれば、その tip をデプロイします
 - 判定できない SHA（`main` の first-parent に無い、など）はデプロイしません。手動の `workflow_dispatch` はこの判定をしません
 

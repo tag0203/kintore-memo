@@ -8,7 +8,9 @@ const API = "https://api.github.com";
 const MAX_LOOKUPS = 20;
 
 /**
- * Latest push of this repository's CI workflow on main for `sha`.
+ * Latest main CI run for `sha` that can deploy.
+ * Push runs count. workflow_dispatch counts only when github-actions[bot]
+ * started it, matching the post-merge dispatch. A human re-run does not.
  * Runs may arrive in any order. A non-completed latest run is pending.
  * Anything other than a completed success is not success.
  * @param {unknown} runs
@@ -22,7 +24,13 @@ export function selectPushCiConclusion(runs, sha) {
   for (const run of runs) {
     if (!run || typeof run !== "object") continue;
     if (!("head_sha" in run) || run.head_sha !== sha) continue;
-    if (!("event" in run) || run.event !== "push") continue;
+    const event = "event" in run ? run.event : "";
+    const triggering =
+      "triggering_actor" in run && run.triggering_actor && typeof run.triggering_actor === "object" &&
+      "login" in run.triggering_actor
+        ? run.triggering_actor.login
+        : "";
+    if (event !== "push" && !(event === "workflow_dispatch" && triggering === "github-actions[bot]")) continue;
     if (!("head_branch" in run) || run.head_branch !== "main") continue;
     if (!("workflow_id" in run) || Number(run.workflow_id) !== CI_WORKFLOW_ID) continue;
     if (!("name" in run) || run.name !== CI_WORKFLOW_NAME) continue;
@@ -83,7 +91,7 @@ export async function fetchPushCiConclusions(options) {
       conclusions[sha] = "unknown";
       continue;
     }
-    const url = `${API}/repos/${path}/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${sha}&branch=main&event=push&per_page=10`;
+    const url = `${API}/repos/${path}/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${sha}&branch=main&per_page=10`;
     try {
       const response = await fetchImpl(url, { headers: apiHeaders(options.token) });
       if (!response.ok) {
