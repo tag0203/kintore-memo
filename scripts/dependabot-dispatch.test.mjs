@@ -26,14 +26,19 @@ const trusted = {
   repositoryId: REPOSITORY_ID,
 };
 
-/** @param {Record<string, unknown>} [overrides] */
+/**
+ * Shape of one element from `GET /repos/{owner}/{repo}/commits/{sha}/pulls`
+ * (Pull Request Simple). That payload has `merged_at` and `merge_commit_sha`
+ * and does not include the boolean `merged`.
+ * @param {Record<string, unknown>} [overrides]
+ */
 function pr(overrides = {}) {
   return {
     user: { login: "dependabot[bot]" },
     base: { ref: "main" },
-    head: { repo: { full_name: REPO } },
+    head: { ref: "dependabot/npm/left-pad-1.2.4", repo: { full_name: REPO } },
     state: "open",
-    merged: false,
+    merged_at: null,
     merge_commit_sha: null,
     auto_merge: null,
     ...overrides,
@@ -83,15 +88,25 @@ describe("classifyPulls", () => {
     expect(classifyPulls([pr({ head: { repo: { full_name: "other/kintore-memo" } } })], REPO).kind).toBe("stop");
   });
 
-  it("returns the squash SHA once the pull request is merged", () => {
-    expect(classifyPulls([pr({ state: "closed", merged: true, merge_commit_sha: MERGE })], REPO)).toEqual({
-      kind: "merged",
-      sha: MERGE,
+  it("uses merged_at from the commits/pulls payload, not a merged boolean", () => {
+    const merged = pr({
+      state: "closed",
+      merged_at: "2026-11-22T09:48:00Z",
+      merge_commit_sha: MERGE,
     });
-    expect(classifyPulls([pr({ state: "closed", merged: true, merge_commit_sha: null })], REPO)).toEqual({
-      kind: "wait",
-      autoMerge: true,
-    });
+    expect(merged).not.toHaveProperty("merged");
+    expect(classifyPulls([merged], REPO)).toEqual({ kind: "merged", sha: MERGE });
+    expect(
+      classifyPulls([pr({ state: "closed", merged_at: "2026-11-22T09:48:00Z", merge_commit_sha: null })], REPO),
+    ).toEqual({ kind: "wait", autoMerge: true });
+    // GitHub fills merge_commit_sha with a test merge while the pull request is still open.
+    expect(
+      classifyPulls([pr({ merge_commit_sha: MERGE })], REPO),
+    ).toEqual({ kind: "wait", autoMerge: false });
+    // Closed without merged_at is not a merge, even if a test SHA is still present.
+    expect(
+      classifyPulls([pr({ state: "closed", merged_at: null, merge_commit_sha: MERGE })], REPO).kind,
+    ).toBe("stop");
   });
 });
 
@@ -161,7 +176,7 @@ describe("dispatchAfterPullRequestCi", () => {
         const body =
           pullsCalls === 1
             ? [pr({ auto_merge: { merge_method: "squash" } })]
-            : [pr({ state: "closed", merged: true, merge_commit_sha: MERGE })];
+            : [pr({ state: "closed", merged_at: "2026-11-22T09:48:00Z", merge_commit_sha: MERGE })];
         return { ok: true, status: 200, json: async () => body };
       }
       if (href.endsWith("/commits/main")) {

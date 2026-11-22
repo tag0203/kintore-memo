@@ -46,6 +46,17 @@ export function trustedPullRequestCi(input) {
 }
 
 /**
+ * `GET /commits/{sha}/pulls` returns Pull Request Simple objects.
+ * That schema has `merged_at` and `merge_commit_sha`. It does not include the
+ * boolean `merged` from the full pull-request resource. An open pull request
+ * can still carry a test `merge_commit_sha`, so the timestamp is the merge signal.
+ * @param {Record<string, unknown>} pr
+ */
+function mergedAt(pr) {
+  return typeof pr.merged_at === "string" ? pr.merged_at : "";
+}
+
+/**
  * @param {unknown} pulls
  * @param {string} repository
  * @returns {{ kind: "merged", sha: string } | { kind: "wait", autoMerge: boolean } | { kind: "stop", reason: string }}
@@ -67,7 +78,7 @@ export function classifyPulls(pulls, repository) {
     if (headRepo && headRepo !== repository) continue;
     relevant.push(pr);
   }
-  const merged = relevant.filter((pr) => pr.merged === true);
+  const merged = relevant.filter((pr) => mergedAt(pr).length > 0);
   if (merged.length > 0) {
     const withSha = merged.find((pr) => SHA_RE.test(String(pr.merge_commit_sha ?? "")));
     if (withSha) return { kind: "merged", sha: String(withSha.merge_commit_sha) };
