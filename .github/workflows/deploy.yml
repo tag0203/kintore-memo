@@ -11,7 +11,11 @@
 # id-token: write. Only deploy-stack and publish-spa assume the OIDC role.
 #
 # Automatic deploy: after the CI workflow succeeds for a push to main, publish dev
-# from that workflow's head SHA. Manual workflow_dispatch is unchanged (dev/staging/prod).
+# from that workflow's head SHA. A workflow_dispatch of CI started by
+# github-actions[bot] on main is the same gate. ensure-main-ci.yml uses it when
+# a GITHUB_TOKEN squash did not start the push workflow. A person starting CI
+# by hand does not deploy. Manual workflow_dispatch of this Deploy workflow is
+# unchanged (dev/staging/prod).
 # workflow_run cannot filter paths. The gate skips when only docs or markdown
 # changed since the last successful dev deployment.
 # Pause automatic deploy with repository variable AUTO_DEPLOY_DEV=false.
@@ -58,8 +62,10 @@ jobs:
     name: Check deploy role configuration
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # workflow_dispatch evaluates the first clause and does not need workflow_run fields.
-    # Automatic deploy requires this repo's CI workflow, from a push to main.
+    # workflow_dispatch of Deploy evaluates the first clause and does not need workflow_run fields.
+    # Automatic deploy requires this repo's CI workflow on main.
+    # The CI event is push, or workflow_dispatch started by github-actions[bot].
+    # pull_request CI and a person clicking "Run workflow" on CI do not match.
     # path may be `.github/workflows/ci.yml` or that file plus `@ref`
     # (the REST example is `.github/workflows/build.yml@main`). The shell
     # rejects any suffix other than main, refs/heads/main, or a 40-hex SHA.
@@ -67,8 +73,14 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (
         github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
         github.event.workflow_run.head_branch == 'main' &&
+        (
+          github.event.workflow_run.event == 'push' ||
+          (
+            github.event.workflow_run.event == 'workflow_dispatch' &&
+            github.event.workflow_run.triggering_actor.login == 'github-actions[bot]'
+          )
+        ) &&
         github.event.workflow_run.name == 'CI' &&
         github.event.workflow_run.workflow_id == 372805829 &&
         github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -109,6 +121,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          TRIGGER_ACTOR: ${{ github.event.workflow_run.triggering_actor.login }}
           TRIGGER_PATH: ${{ github.event.workflow_run.path }}
           TRIGGER_NAME: ${{ github.event.workflow_run.name }}
           TRIGGER_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
@@ -134,7 +147,7 @@ jobs:
             TRUSTED="$(node -e 'const decision=JSON.parse(process.argv[1]); if(decision.ok!==true&&decision.ok!==false) process.exit(2); process.stdout.write(decision.ok?"true":"false")' "${DECISION}")" \
               || { echo "Could not read the CI workflow check."; exit 1; }
             if [ "${TRUSTED}" != "true" ]; then
-              echo "Refusing automatic deploy: triggering workflow is not a successful push of CI on main in this repository."
+              echo "Refusing automatic deploy: triggering workflow is not CI on main in this repository."
               exit 1
             fi
             case "${AUTO_DEPLOY_DEV:-}" in
