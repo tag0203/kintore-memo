@@ -31,11 +31,13 @@ on:
 permissions:
   contents: read
 
-# Cancel only the previous pull_request run. main's ref is refs/heads/main for
-# every push, so cancel-in-progress there drops CI for the earlier commit and
-# that commit never deploys. Each main SHA keeps its own run.
+# Cancel only the previous pull_request run. The group is the PR number:
+# head_ref is only the branch name, so two forks with the same name would
+# cancel each other. main's ref is refs/heads/main for every push, so
+# cancel-in-progress there drops CI for the earlier commit and that commit
+# never deploys. Each main SHA keeps its own run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
