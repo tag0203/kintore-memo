@@ -161,8 +161,14 @@ jobs:
       actions: write
       contents: read
       pull-requests: read
+    # GitHub keeps one pending run per concurrency group and cancels the
+    # previous pending run even when cancel-in-progress is false. A shared
+    # group would drop a merged Dependabot PR when the next PR's CI finished.
+    # Each CI run therefore has its own group. The script also scans every
+    # recent Dependabot squash on main, so one survivor still starts CI for
+    # the tip that contains the others.
     concurrency:
-      group: dependabot-post-merge-dispatch
+      group: dependabot-post-merge-${{ github.event.workflow_run.id }}
       cancel-in-progress: false
     steps:
       - name: Checkout the dispatch script from main

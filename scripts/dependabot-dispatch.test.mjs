@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { CI_WORKFLOW_ID, REPOSITORY_ID } from "./ci-workflow-run.mjs";
 import {
-  chooseDispatchTarget,
   classifyPulls,
   dispatchAfterPullRequestCi,
   mainCiCovers,
+  mergeShas,
+  planReconcile,
   trustedPullRequestCi,
 } from "./dependabot-dispatch.mjs";
 
@@ -110,38 +112,54 @@ describe("classifyPulls", () => {
   });
 });
 
-describe("chooseDispatchTarget", () => {
-  it("dispatches the tip when it is the merge or a descendant without CI", () => {
-    expect(chooseDispatchTarget({ mergeSha: MERGE, mainSha: MERGE, compareStatus: "identical", runs: [] })).toEqual({
+describe("planReconcile", () => {
+  it("dispatches the tip when it is the only merge or it contains earlier merges", () => {
+    expect(planReconcile({ mainSha: MERGE, merges: [MERGE], contained: [], runs: [] })).toEqual({
       dispatch: true,
       sha: MERGE,
       reason: "merged commit is the tip of main",
     });
-    expect(chooseDispatchTarget({ mergeSha: MERGE, mainSha: TIP, compareStatus: "ahead", runs: [] })).toMatchObject({
+    expect(planReconcile({ mainSha: TIP, merges: [MERGE, TIP], contained: [MERGE], runs: [] })).toEqual({
       dispatch: true,
       sha: TIP,
+      reason: "main tip contains Dependabot merges that have no CI",
     });
   });
 
-  it("does not dispatch a diverged tip or a tip that already has CI", () => {
-    expect(chooseDispatchTarget({ mergeSha: MERGE, mainSha: TIP, compareStatus: "diverged", runs: [] }).dispatch).toBe(
-      false,
-    );
+  it("still dispatches the tip when the earlier dispatcher was dropped", () => {
+    // Thirteen Dependabot PRs merged together. Pending dispatchers share a
+    // concurrency group and GitHub cancels all but one, even with
+    // cancel-in-progress false. The survivor must cover every squash that
+    // landed, not only the pull request that triggered it.
+    const dropped = Array.from({ length: 12 }, (_, index) => `${index.toString(16).padStart(40, "d")}`);
     expect(
-      chooseDispatchTarget({
-        mergeSha: MERGE,
+      planReconcile({
         mainSha: TIP,
-        compareStatus: "identical",
+        merges: [...dropped, TIP],
+        contained: dropped,
+        runs: [],
+      }),
+    ).toMatchObject({ dispatch: true, sha: TIP });
+  });
+
+  it("does not dispatch a diverged merge or a tip that already has CI", () => {
+    expect(planReconcile({ mainSha: TIP, merges: [MERGE], contained: [], runs: [] }).dispatch).toBe(false);
+    expect(
+      planReconcile({
+        mainSha: TIP,
+        merges: [TIP],
+        contained: [],
         runs: [ciRun({ head_sha: TIP })],
       }).dispatch,
     ).toBe(false);
     expect(
-      chooseDispatchTarget({
-        mergeSha: MERGE,
+      planReconcile({
         mainSha: TIP,
-        compareStatus: "ahead",
+        merges: [MERGE, TIP],
+        contained: [MERGE],
         runs: [
           ciRun({
+            head_sha: TIP,
             event: "workflow_dispatch",
             triggering_actor: { login: "github-actions[bot]" },
             status: "in_progress",
@@ -158,6 +176,31 @@ describe("chooseDispatchTarget", () => {
     );
     expect(mainCiCovers([ciRun({ conclusion: "failure" })], TIP)).toBe(false);
     expect(mainCiCovers([ciRun({ event: "pull_request", head_branch: "dependabot/npm/left-pad" })], TIP)).toBe(false);
+  });
+});
+
+describe("mergeShas", () => {
+  it("keeps merged Dependabot squashes and ignores a test merge SHA", () => {
+    expect(
+      mergeShas(
+        [
+          pr({ state: "closed", merged_at: "2026-11-14T00:00:00Z", merge_commit_sha: MERGE }),
+          pr({ state: "closed", merged_at: "2026-11-14T00:01:00Z", merge_commit_sha: TIP }),
+          pr({ merge_commit_sha: "e".repeat(40) }),
+          pr({ user: { login: "tag0203" }, state: "closed", merged_at: "2026-11-14T00:02:00Z", merge_commit_sha: "f".repeat(40) }),
+        ],
+        REPO,
+      ),
+    ).toEqual([MERGE, TIP]);
+  });
+});
+
+describe("dispatch concurrency", () => {
+  it("gives every CI run its own group so a pending dispatcher is not replaced", () => {
+    const text = readFileSync(new URL("../.github/workflows/dependabot-auto-merge.yml", import.meta.url), "utf8");
+    const job = text.slice(text.indexOf("  dispatch-ci:"));
+    expect(job).toContain("group: dependabot-post-merge-${{ github.event.workflow_run.id }}");
+    expect(job).not.toContain("group: dependabot-post-merge-dispatch");
   });
 });
 
@@ -178,6 +221,13 @@ describe("dispatchAfterPullRequestCi", () => {
             ? [pr({ auto_merge: { merge_method: "squash" } })]
             : [pr({ state: "closed", merged_at: "2026-11-22T09:48:00Z", merge_commit_sha: MERGE })];
         return { ok: true, status: 200, json: async () => body };
+      }
+      if (href.includes("/pulls?state=closed")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [pr({ state: "closed", merged_at: "2026-11-22T09:48:00Z", merge_commit_sha: MERGE })],
+        };
       }
       if (href.endsWith("/commits/main")) {
         return { ok: true, status: 200, json: async () => ({ sha: MERGE }) };
@@ -210,11 +260,74 @@ describe("dispatchAfterPullRequestCi", () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 
+  it("dispatches the later tip when this run was not the pull request that merged it", async () => {
+    /** @type {string[]} */
+    const posts = [];
+    /** @type {typeof fetch} */
+    const fetchImpl = async (url, init = {}) => {
+      const href = String(url);
+      if (href.endsWith(`/commits/${PR_HEAD}/pulls`)) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [pr({ state: "closed", merged_at: "2026-11-14T01:00:00Z", merge_commit_sha: MERGE })],
+        };
+      }
+      if (href.includes("/pulls?state=closed")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            pr({ state: "closed", merged_at: "2026-11-14T02:00:00Z", merge_commit_sha: TIP }),
+            pr({ state: "closed", merged_at: "2026-11-14T01:00:00Z", merge_commit_sha: MERGE }),
+          ],
+        };
+      }
+      if (href.endsWith("/commits/main")) {
+        return { ok: true, status: 200, json: async () => ({ sha: TIP }) };
+      }
+      if (href.includes(`/compare/${MERGE}...${TIP}`)) {
+        return { ok: true, status: 200, json: async () => ({ status: "ahead" }) };
+      }
+      if (href.includes("/runs?")) {
+        return { ok: true, status: 200, json: async () => ({ workflow_runs: [] }) };
+      }
+      if (href.endsWith("/dispatches") && init.method === "POST") {
+        posts.push(String(init.body));
+        return { ok: true, status: 204, json: async () => ({}) };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    };
+    const result = await dispatchAfterPullRequestCi({
+      token: TOKEN,
+      repository: REPO,
+      headSha: PR_HEAD,
+      fetchImpl,
+      now: () => 0,
+      sleep: async () => {},
+    });
+    expect(result).toMatchObject({ dispatched: true, sha: TIP });
+    expect(posts).toEqual([JSON.stringify({ ref: "main", inputs: { head_sha: TIP } })]);
+  });
+
   it("stops without dispatching when the pull request stays open without auto-merge", async () => {
     /** @type {typeof fetch} */
     const fetchImpl = async (url) => {
-      expect(String(url)).toContain("/pulls");
-      return { ok: true, status: 200, json: async () => [pr()] };
+      const href = String(url);
+      if (href.endsWith(`/commits/${PR_HEAD}/pulls`)) {
+        return { ok: true, status: 200, json: async () => [pr()] };
+      }
+      if (href.endsWith("/commits/main")) {
+        return { ok: true, status: 200, json: async () => ({ sha: TIP }) };
+      }
+      if (href.includes("/runs?")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ workflow_runs: [ciRun({ head_sha: TIP })] }),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
     };
     let now = 0;
     const result = await dispatchAfterPullRequestCi({

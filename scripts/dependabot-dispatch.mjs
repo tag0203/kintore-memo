@@ -123,23 +123,62 @@ export function mainCiCovers(runs, sha) {
 }
 
 /**
- * @param {{ mergeSha: string, mainSha: string, compareStatus: string, runs: unknown }} input
+ * Merge commit SHAs from a pull list. Pull Request Simple uses `merged_at`;
+ * a test `merge_commit_sha` on an unmerged pull request is ignored.
+ * @param {unknown} pulls
+ * @param {string} repository
+ * @returns {string[]}
+ */
+export function mergeShas(pulls, repository) {
+  if (!Array.isArray(pulls)) return [];
+  /** @type {string[]} */
+  const shas = [];
+  for (const pr of pulls) {
+    if (!pr || typeof pr !== "object") continue;
+    const login = "user" in pr && pr.user && typeof pr.user === "object" && "login" in pr.user ? pr.user.login : "";
+    const base = "base" in pr && pr.base && typeof pr.base === "object" && "ref" in pr.base ? pr.base.ref : "";
+    const headRepo =
+      "head" in pr && pr.head && typeof pr.head === "object" && "repo" in pr.head && pr.head.repo &&
+      typeof pr.head.repo === "object" && "full_name" in pr.head.repo
+        ? pr.head.repo.full_name
+        : "";
+    if (login !== DEPENDABOT || base !== "main") continue;
+    if (headRepo && headRepo !== repository) continue;
+    if (mergedAt(pr).length === 0) continue;
+    const sha = "merge_commit_sha" in pr ? String(pr.merge_commit_sha ?? "") : "";
+    if (!SHA_RE.test(sha) || shas.includes(sha)) continue;
+    shas.push(sha);
+  }
+  return shas;
+}
+
+/**
+ * Decide whether to start CI on the current tip of main.
+ * `workflow_dispatch` checks out `ref: main`, so only the tip can be pinned.
+ * One run of that tip publishes every Dependabot squash it contains.
+ * `contained` lists merge SHAs that are ancestors of the tip (the tip itself
+ * is contained without being listed).
+ * @param {{ mainSha: string, merges: string[], contained: string[], runs: unknown }} input
  * @returns {{ dispatch: boolean, sha: string, reason: string }}
  */
-export function chooseDispatchTarget(input) {
-  if (!SHA_RE.test(input.mergeSha) || !SHA_RE.test(input.mainSha)) {
-    return { dispatch: false, sha: "", reason: "SHA is not 40 lowercase hex characters" };
+export function planReconcile(input) {
+  if (!SHA_RE.test(input.mainSha)) {
+    return { dispatch: false, sha: "", reason: "main SHA is not 40 lowercase hex characters" };
   }
-  if (input.compareStatus !== "identical" && input.compareStatus !== "ahead") {
-    return { dispatch: false, sha: "", reason: "merge commit is not contained in main" };
+  const merges = [...new Set((input.merges ?? []).filter((sha) => SHA_RE.test(sha)))];
+  const contained = new Set((input.contained ?? []).filter((sha) => SHA_RE.test(sha)));
+  const outstanding = merges.filter((sha) => sha === input.mainSha || contained.has(sha));
+  if (outstanding.length === 0) {
+    return { dispatch: false, sha: "", reason: "no Dependabot merge on main is waiting for CI" };
   }
   if (mainCiCovers(input.runs, input.mainSha)) {
     return { dispatch: false, sha: "", reason: "main already has CI for this commit" };
   }
+  const onlyTip = outstanding.length === 1 && outstanding[0] === input.mainSha;
   return {
     dispatch: true,
     sha: input.mainSha,
-    reason: input.compareStatus === "identical" ? "merged commit is the tip of main" : "main tip contains the merged commit",
+    reason: onlyTip ? "merged commit is the tip of main" : "main tip contains Dependabot merges that have no CI",
   };
 }
 
@@ -158,8 +197,9 @@ function repositoryPath(repository) {
  * @param {string} repository
  * @param {string} path
  * @param {{ method?: string, body?: string }} [init]
+ * @param {boolean} [allowFailure]
  */
-async function api(fetchImpl, token, repository, path, init = {}) {
+async function api(fetchImpl, token, repository, path, init = {}, allowFailure = false) {
   const response = await fetchImpl(`${API}/repos/${repositoryPath(repository)}${path}`, {
     method: init.method ?? "GET",
     body: init.body,
@@ -172,15 +212,100 @@ async function api(fetchImpl, token, repository, path, init = {}) {
     },
   });
   if (response.status === 204) return null;
-  if (!response.ok) throw new Error(`GitHub API ${response.status}`);
+  if (!response.ok) {
+    if (allowFailure) return null;
+    throw new Error(`GitHub API ${response.status}`);
+  }
   return response.json();
 }
 
 /**
- * After Dependabot pull-request CI succeeds, dispatch CI on the main commit
- * that contains the squash. GITHUB_TOKEN can start workflow_dispatch.
- * The dispatched ref is always the branch name main. head_sha is the tip SHA
- * read from the API, and CI refuses the run unless GitHub checked out that SHA.
+ * @param {typeof fetch} fetchImpl
+ * @param {string} token
+ * @param {string} repository
+ */
+async function readMainSha(fetchImpl, token, repository) {
+  const main = await api(fetchImpl, token, repository, "/commits/main");
+  return main && typeof main === "object" && "sha" in main ? String(main.sha) : "";
+}
+
+/**
+ * Start CI for the tip of main when any recent Dependabot squash on main has
+ * no CI yet. ref is the branch name main. CI rejects the run unless the
+ * checked-out commit equals head_sha, so a tip that moved is not deployed.
+ * @param {{ token: string, repository: string, extraMerge?: string, fetchImpl: typeof fetch }} options
+ */
+async function dispatchUncoveredTip(options) {
+  const seen = new Set();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const mainSha = await readMainSha(options.fetchImpl, options.token, options.repository);
+    if (!SHA_RE.test(mainSha)) {
+      return { dispatched: false, sha: "", reason: "main SHA is not 40 lowercase hex characters" };
+    }
+    if (seen.has(mainSha)) {
+      return { dispatched: false, sha: "", reason: "main moved while dispatching CI" };
+    }
+    const runsBody = await api(
+      options.fetchImpl,
+      options.token,
+      options.repository,
+      `/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${mainSha}&branch=main&per_page=20`,
+    );
+    const runs = runsBody && typeof runsBody === "object" && "workflow_runs" in runsBody ? runsBody.workflow_runs : [];
+    if (mainCiCovers(runs, mainSha)) {
+      return { dispatched: false, sha: "", reason: "main already has CI for this commit" };
+    }
+    const listed = await api(
+      options.fetchImpl,
+      options.token,
+      options.repository,
+      "/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=50",
+    );
+    const merges = mergeShas(listed, options.repository);
+    if (options.extraMerge && !merges.includes(options.extraMerge)) merges.push(options.extraMerge);
+    /** @type {string[]} */
+    const contained = [];
+    for (const sha of merges) {
+      if (sha === mainSha) continue;
+      const compare = await api(
+        options.fetchImpl,
+        options.token,
+        options.repository,
+        `/compare/${sha}...${mainSha}`,
+        {},
+        true,
+      );
+      const status = compare && typeof compare === "object" && "status" in compare ? String(compare.status) : "";
+      if (status === "identical" || status === "ahead") contained.push(sha);
+    }
+    const target = planReconcile({ mainSha, merges, contained, runs });
+    if (!target.dispatch) return { dispatched: false, sha: "", reason: target.reason };
+    const againSha = await readMainSha(options.fetchImpl, options.token, options.repository);
+    if (againSha !== target.sha) {
+      seen.add(mainSha);
+      continue;
+    }
+    await api(
+      options.fetchImpl,
+      options.token,
+      options.repository,
+      `/actions/workflows/${CI_WORKFLOW_ID}/dispatches`,
+      {
+        method: "POST",
+        body: JSON.stringify({ ref: "main", inputs: { head_sha: target.sha } }),
+      },
+    );
+    return { dispatched: true, sha: target.sha, reason: target.reason };
+  }
+  return { dispatched: false, sha: "", reason: "main moved while dispatching CI" };
+}
+
+/**
+ * After pull-request CI succeeds, dispatch CI for the tip of main if it
+ * contains a Dependabot squash that has no CI. Every CI completion runs this,
+ * and each run has its own concurrency group, so a pending run is not replaced
+ * by the next pull request. The scan still covers merges whose own run was lost.
+ * GITHUB_TOKEN can start workflow_dispatch. The ref is always the branch main.
  * @param {{
  *   token: string,
  *   repository: string,
@@ -196,56 +321,23 @@ export async function dispatchAfterPullRequestCi(options) {
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const now = options.now ?? (() => Date.now());
   const started = now();
+  /** @type {string} */
+  let extraMerge = "";
   while (true) {
     const pulls = await api(fetchImpl, options.token, options.repository, `/commits/${options.headSha}/pulls`);
     const classified = classifyPulls(pulls, options.repository);
-    if (classified.kind === "stop") return { dispatched: false, sha: "", reason: classified.reason };
-    if (classified.kind === "merged") {
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const main = await api(fetchImpl, options.token, options.repository, "/commits/main");
-        const mainSha = main && typeof main === "object" && "sha" in main ? String(main.sha) : "";
-        if (!SHA_RE.test(mainSha)) {
-          return { dispatched: false, sha: "", reason: "main SHA is not 40 lowercase hex characters" };
-        }
-        const compare = await api(
-          fetchImpl,
-          options.token,
-          options.repository,
-          `/compare/${classified.sha}...${mainSha}`,
-        );
-        const status = compare && typeof compare === "object" && "status" in compare ? String(compare.status) : "";
-        const runsBody = await api(
-          fetchImpl,
-          options.token,
-          options.repository,
-          `/actions/workflows/${CI_WORKFLOW_ID}/runs?head_sha=${mainSha}&branch=main&per_page=20`,
-        );
-        const runs =
-          runsBody && typeof runsBody === "object" && "workflow_runs" in runsBody ? runsBody.workflow_runs : [];
-        const target = chooseDispatchTarget({
-          mergeSha: classified.sha,
-          mainSha,
-          compareStatus: status,
-          runs,
-        });
-        if (!target.dispatch) return { dispatched: false, sha: "", reason: target.reason };
-        const again = await api(fetchImpl, options.token, options.repository, "/commits/main");
-        const againSha = again && typeof again === "object" && "sha" in again ? String(again.sha) : "";
-        if (againSha !== target.sha) continue;
-        await api(fetchImpl, options.token, options.repository, `/actions/workflows/${CI_WORKFLOW_ID}/dispatches`, {
-          method: "POST",
-          body: JSON.stringify({ ref: "main", inputs: { head_sha: target.sha } }),
-        });
-        return { dispatched: true, sha: target.sha, reason: target.reason };
-      }
-      return { dispatched: false, sha: "", reason: "main moved while dispatching CI" };
-    }
+    if (classified.kind === "merged") extraMerge = classified.sha;
+    if (classified.kind !== "wait") break;
     const limit = classified.autoMerge ? AUTO_MERGE_WAIT_MS : OPEN_GRACE_MS;
-    if (now() - started >= limit) {
-      return { dispatched: false, sha: "", reason: "Dependabot pull request was not merged" };
-    }
+    if (now() - started >= limit) break;
     await sleep(POLL_MS);
   }
+  return dispatchUncoveredTip({
+    token: options.token,
+    repository: options.repository,
+    extraMerge,
+    fetchImpl,
+  });
 }
 
 function fromEnv() {
