@@ -1,0 +1,45 @@
+# GITHUB_TOKEN squash merges do not start the push CI workflow. About once an
+# hour, if main's tip has no successful CI and none in progress, start CI for
+# that exact SHA. A push to main still starts CI immediately, and this job then
+# does nothing. If main moves after the SHA is read, the pinned run fails and
+# the next hour tries the new tip. A duplicate run is harmless.
+# Manual workflow_dispatch runs the same check. It has no SHA input.
+# The CI run is started by GITHUB_TOKEN, so deploy.yml treats it like the
+# hourly run. A person starting CI itself from the Actions tab does not deploy.
+
+name: Ensure main CI
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ensure-main-ci
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch CI when main has none
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout the checker from main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Dispatch CI for the tip when it has none
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+        run: |
+          set -euo pipefail
+          node scripts/ensure-main-ci.mjs

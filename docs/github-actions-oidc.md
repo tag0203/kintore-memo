@@ -10,6 +10,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | pull request、`main` への push、手動 | `npm test`、`npm run typecheck`、`npm run build`、`npm run check:secrets`、`go test`（Go 1.26.10 以上の 1.26 系。CVE-2026-111943）、`govulncheck -scan symbol ./...`（`api/`。到達する既知の脆弱性で失敗）、`npm audit --omit=dev`（警告のみ。失敗にしない）。`infra/template.yaml` があるとき `sam validate --lint` と `sam build`。OIDC 用テンプレートがあればそれも lint。Actions はフルコミット SHA 固定 |
 | `.github/dependabot.yml` | 週次 | Go modules（`api/`）、npm、GitHub Actions。Actions はコミット SHA 固定なので、その SHA と版のコメントを更新する |
+| `.github/workflows/ensure-main-ci.yml` | 約1時間ごと。Actions タブから同じ確認を手動実行できる | `main` の先端 SHA に成功または実行中の CI が無いときだけ、その SHA へ CI を出す。人の push で CI が走っていれば何もしない |
 | `.github/workflows/deploy.yml` | `main` への push、または `github-actions[bot]` による `main` の CI `workflow_dispatch` が成功したあと（自動は `dev` だけ）。Actions タブからの Deploy の手動実行（`dev` / `staging` / `prod`） | Secret `AWS_DEPLOY_ROLE_ARN` が空なら no-op。あるときだけ、**ビルドと AWS 資格情報をジョブ分離**したうえで `sam deploy` し、SPA を S3 に同期して CloudFront を無効化。自動実行は CI がテストした SHA を checkout する |
 
 デプロイは `main` からの実行だけがロールを引き受けます。pull request ではデプロイしません。OIDC の信頼条件は AWS がマップする `workflow` claim（workflow の `name:`。既定は `Deploy`）でも限定します。GitHub の JWT にある `workflow_ref`（ファイルパス）は AWS STS の condition key に出てこないので使いません。reusable workflow 向けの `job_workflow_ref` も、直接起動の Deploy には使いません。
@@ -19,7 +20,7 @@ Issue [#14](https://github.com/tag0203/kintore-memo/issues/14) の最初のス�
 `deploy.yml` は CI（`.github/workflows/ci.yml` の `name: CI`）が完了した `workflow_run` でも動きます。条件は次のとおりです。
 
 - 対象ブランチは `main`
-- 起動元イベントは `push`、または `github-actions[bot]` が `main` に対して行った CI の `workflow_dispatch`。pull request の CI と、人が Actions タブから実行した CI ではデプロイしない。`workflow_dispatch` は Dependabot を `GITHUB_TOKEN` で squash したあとの経路で、そのトークンは `push` の workflow を起動できない。dispatch の `ref` はブランチ `main` だけで、入力 `head_sha` がそのとき読んだ `main` の SHA と一致しない run は CI が失敗する
+- 起動元イベントは `push`、または `github-actions[bot]` が `main` に対して行った CI の `workflow_dispatch`。pull request の CI と、人が Actions タブから実行した CI ではデプロイしない。人の push は今までどおり即時に CI が走る。`GITHUB_TOKEN` の squash は `push` の CI を起動できないので、`.github/workflows/ensure-main-ci.yml` が約1時間ごとに `main` の先端を見て、その SHA の成功または実行中の CI が無いときだけ同じ SHA へ CI を出す。人がこの確認を手動実行しても同じ判定で、別の SHA は指定できない
 - `github.event.workflow_run.conclusion == 'success'`
 - 起動元の workflow 名は `CI`、workflow id は `372805829`（このリポジトリの `.github/workflows/ci.yml`）
 - `path` は `.github/workflows/ci.yml`、またはその後ろに `@main` / `@refs/heads/main` / `@<40桁の sha>` が付いた形。Workflow Run の REST 例は `.github/workflows/build.yml@main` で、このリポジトリの現行レスポンスは接尾辞なし。ファイル部分と ref を分けて見る

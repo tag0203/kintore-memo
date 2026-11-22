@@ -14,7 +14,7 @@ on:
   # Feature and Dependabot branches are checked on pull_request only. A push
   # trigger there runs the same jobs a second time. main stays on push so a
   # merge still runs CI, which deploy.yml waits on.
-  # workflow_dispatch head_sha is set by the Dependabot post-merge job. When
+  # workflow_dispatch head_sha is set by ensure-main-ci.yml. When
   # github-actions[bot] starts that run, the SHA must be the commit GitHub
   # checked out. A person can still run CI by hand and leave the input empty;
   # that run does not deploy.

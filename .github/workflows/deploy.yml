@@ -12,10 +12,10 @@
 #
 # Automatic deploy: after the CI workflow succeeds for a push to main, publish dev
 # from that workflow's head SHA. A workflow_dispatch of CI started by
-# github-actions[bot] on main is the same gate: GITHUB_TOKEN cannot start the
-# push workflow after it squash-merges, so the Dependabot post-merge job
-# dispatches CI for that commit. A person starting CI by hand does not deploy.
-# Manual workflow_dispatch of this Deploy workflow is unchanged (dev/staging/prod).
+# github-actions[bot] on main is the same gate. ensure-main-ci.yml uses it when
+# a GITHUB_TOKEN squash did not start the push workflow. A person starting CI
+# by hand does not deploy. Manual workflow_dispatch of this Deploy workflow is
+# unchanged (dev/staging/prod).
 # workflow_run cannot filter paths. The gate skips when only docs or markdown
 # changed since the last successful dev deployment.
 # Pause automatic deploy with repository variable AUTO_DEPLOY_DEV=false.

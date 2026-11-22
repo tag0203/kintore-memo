@@ -3,21 +3,15 @@
 # merges only after branch rules pass. With no required status checks, auto-merge
 # merges as soon as it is enabled, so main must require the CI jobs first.
 #
-# pull_request, not pull_request_target. Neither job checks out the pull request.
+# pull_request, not pull_request_target. This job does not checkout the pull request.
 # Dependabot-triggered runs get a read-only GITHUB_TOKEN unless permissions are
-# declared. The auto-merge job has the permissions `gh pr merge --auto` needs:
+# declared. Job permissions are the ones `gh pr merge --auto` needs:
 # contents: write to merge, pull-requests: write to enable auto-merge.
-# The dispatch job runs from main on workflow_run and adds actions: write so
-# it can start CI. It does not run in the Dependabot pull_request job.
 # https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions-for-workflow-runs-triggered-by-dependabot
 #
-# The merge actor is GITHUB_TOKEN. A push from that token does not start CI.
-# workflow_dispatch does. After pull-request CI succeeds, the dispatch job
-# (this file on main, not the pull request) starts CI for the squash commit
-# with head_sha set to that commit. deploy.yml accepts that run only when
-# github-actions[bot] started it, the branch is main, and CI succeeded.
-# A person running CI by hand does not deploy. No PAT or GitHub App.
-# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow
+# The merge actor is GITHUB_TOKEN, so the squash push does not start CI.
+# .github/workflows/ensure-main-ci.yml starts that CI about hourly.
+# A person pushing to main still starts CI immediately. No PAT or GitHub App.
 
 name: Dependabot auto-merge
 
@@ -25,12 +19,6 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
-  # Runs from the default branch. Fires when Dependabot pull-request CI
-  # finishes, which is not a GITHUB_TOKEN event. The dispatched CI run is
-  # workflow_dispatch, so this job's if excludes it and does not loop.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
 
 permissions: {}
 
@@ -141,54 +129,3 @@ jobs:
           });
           process.exit(result.status === null ? 1 : result.status);
           EOF
-
-  dispatch-ci:
-    name: Dispatch CI for the merged commit
-    # Pull-request CI only. The workflow_dispatch run this job starts must not
-    # start another dispatch. Identity checks run again in the script.
-    if: >-
-      github.event_name == 'workflow_run' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.name == 'CI' &&
-      github.event.workflow_run.workflow_id == 372805829 &&
-      github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.head_repository.id == github.repository_id &&
-      github.repository_id == 1389679197
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      actions: write
-      contents: read
-      pull-requests: read
-    # GitHub keeps one pending run per concurrency group and cancels the
-    # previous pending run even when cancel-in-progress is false. A shared
-    # group would drop a merged Dependabot PR when the next PR's CI finished.
-    # Each CI run therefore has its own group. The script also scans every
-    # recent Dependabot squash on main, so one survivor still starts CI for
-    # the tip that contains the others.
-    concurrency:
-      group: dependabot-post-merge-${{ github.event.workflow_run.id }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout the dispatch script from main
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Dispatch CI on the squash commit
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          REPOSITORY_ID: ${{ github.repository_id }}
-          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          CI_EVENT: ${{ github.event.workflow_run.event }}
-          CI_NAME: ${{ github.event.workflow_run.name }}
-          CI_WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
-          CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          CI_HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
-          CI_HEAD_REPOSITORY_ID: ${{ github.event.workflow_run.head_repository.id }}
-        run: |
-          set -euo pipefail
-          node scripts/dependabot-dispatch.mjs
